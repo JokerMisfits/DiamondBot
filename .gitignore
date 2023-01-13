@@ -206,3 +206,5 @@ composer.lock
 composer.json
 *.mp3
 *.exe
+*.rar
+*.png

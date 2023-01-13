@@ -3,8 +3,8 @@
 class BotOptions {
 
     private static array $botInfo = [
-        'version' => '0.0.3',
-        'build' => 14,
+        'version' => '1.0.0',
+        'build' => 15,
     ];
 
     private static array $botValidateChannels = [
@@ -31,15 +31,4 @@ class BotOptions {
     public static function getBotOption($name) : array | string {
         return self::$$name;
     }
-
-
-    //for voiceClient
-
-    // $executable = rtrim((string) explode(PHP_EOL, shell_exec("{$which} /r ffmpeg {$executable}"))[0]);
-    //        $binaries = [
-    //            'ffmpeg',
-    //            'ffplay',
-    //            'ffprobe',
-    //        ];
 }
-
