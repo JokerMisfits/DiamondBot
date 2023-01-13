@@ -12,6 +12,7 @@ use React\EventLoop\LoopInterface;
 use YoutubeDl\Options;
 use YoutubeDl\YoutubeDl;
 use Psr\Log\LoggerInterface;
+use React\ChildProcess\Process;
 
 class Command {
 
@@ -23,6 +24,8 @@ class Command {
     private static VoiceClient $vc;
     private static LoopInterface $loop;
     private static string $audioPath = '';
+    private static array $queue = [];
+    private static int $queueCounter = 0;
     private static array $args;
     private static array $voiceStates;
     private static bool $radioState = false;
@@ -228,12 +231,24 @@ class Command {
         $play = function () use (&$play) {
             self::$radioState = true;
             self::$vc->playFile(self::$audioPath)->done(function () use (&$play){
+                $size = sizeof(self::$queue);
                 if(isset(self::$args[1]) && self::$args[1] == 'repeat'){
+                    self::$radioState = true;
+                    self::$loop->addTimer(0, $play);
+                }
+                elseif(self::$queueCounter != $size){
+                    self::checkQueue();
                     self::$radioState = true;
                     self::$loop->addTimer(0, $play);
                 }
                 else{
                     self::$radioState = false;
+                    if($size > 0){
+                        self::deleteAudio(1);
+                    }
+                    else{
+                        self::deleteAudio();
+                    }
                     self::$vc->close();
                 }
             });
@@ -280,6 +295,13 @@ class Command {
             if(isset(self::$args[1])){
                 if(self::$args[1] == 'stop'){
                     self::$radioState = false;
+                    if(sizeof(self::$queue) > 0){
+                        self::deleteAudio(1);
+                    }
+                    else{
+                        self::deleteAudio();
+                    }
+                    self::deleteAudio();
                     self::$vc->close();
                 }
                 elseif(self::$args[1] == 'pause'){
@@ -288,7 +310,10 @@ class Command {
                 elseif(self::$args[1] == 'unpause'){
                     self::$vc->unpause();
                 }
-                elseif(self::$args[1] == 'y' && isset(self::$args[2])){
+                elseif(self::$args[1] == 'skip'){
+                    //ToDO Написать алгоритм для скипа n количества песен
+                }
+                elseif((self::$args[1] == 'y' || self::$args[1] == 'у') && isset(self::$args[2]) && !self::$radioState || (self::$args[1] == 'add' && self::$radioState)){
 
                     $deferred = new Deferred();
 
@@ -297,24 +322,29 @@ class Command {
                     });
 
                     $deferred->promise()->then(function ($audioPath) use ($play){
-                        self::$audioPath = $audioPath;
 
-                        $deferred = new Deferred();
+                        if(self::$args[1] == 'add'){
+                            self::$loop->addTimer(0,function () use ($audioPath) {
+                                self::setQueue($audioPath);
+                            });
+                        }
+                        else{
+                            self::$audioPath = $audioPath;
+                            $deferred = new Deferred();
 
-                        self::$loop->addTimer(0,function () use ($deferred){
-                            self::getUsersChannel($deferred, self::$message->author->id);
-                        });
+                            self::$loop->addTimer(0,function () use ($deferred){
+                                self::getUsersChannel($deferred, self::$message->author->id);
+                            });
 
-                        $deferred->promise()->then(function (Channel $channel) use ($play){
-                            self::$loop->addTimer(0,function () use ($channel, $play){
-                                self::$discord->joinVoiceChannel($channel, false, true)->done(function (VoiceClient $vc) use ($play){
-                                    self::$vc = $vc;
-                                    self::$loop->addTimer(0, $play);
+                            $deferred->promise()->then(function (Channel $channel) use ($play){
+                                self::$loop->addTimer(0,function () use ($channel, $play){
+                                    self::$discord->joinVoiceChannel($channel, false, true)->done(function (VoiceClient $vc) use ($play){
+                                        self::$vc = $vc;
+                                        self::$loop->addTimer(0, $play);
+                                    });
                                 });
                             });
-                        });
-
-
+                        }
                     })->otherwise(function (Exception | Throwable | int $e){
                         if(is_int($e)){
                             if($e == 0){
@@ -324,18 +354,18 @@ class Command {
                                         ->addEmbed(embeds::createEmbed('Некорректная ссылка','<@' . self::$message['author']['id'] . '>',6738196))
                                         ->setTts(false)
                                         ->setReplyTo(self::$message);
-
                                     self::$channel->sendMessage($msg);
                                 });
                             }
                             elseif($e == 1){
-                                $msg = MessageBuilder::new()
-                                    ->setContent('')
-                                    ->addEmbed(embeds::createEmbed('ffmpeg/yt-dlp.exe не найден','<@' . self::$message['author']['id'] . '>',6738196))
-                                    ->setTts(false)
-                                    ->setReplyTo(self::$message);
-
-                                self::$channel->sendMessage($msg);
+                                self::$loop->addTimer(0, function (){
+                                    $msg = MessageBuilder::new()
+                                        ->setContent('')
+                                        ->addEmbed(embeds::createEmbed('ffmpeg/yt-dlp.exe не найден','<@' . self::$message['author']['id'] . '>',6738196))
+                                        ->setTts(false)
+                                        ->setReplyTo(self::$message);
+                                    self::$channel->sendMessage($msg);
+                                });
                             }
                         }
                         else{
@@ -343,6 +373,19 @@ class Command {
                         }
                     });
                 }
+                else{
+                    self::$loop->addTimer(0,function (){
+                        $msg = MessageBuilder::new()
+                            ->setContent('')
+                            ->addEmbed(embeds::createEmbed('Параметр: ' . self::$args[1] . ' не найден.' ,'<@' . self::$message['author']['id'] . '>',6738196))
+                            ->setTts(false)
+                            ->setReplyTo(self::$message);
+                        self::$channel->sendMessage($msg);
+                    });
+                }
+            }
+            else{
+                //ToDO Вывод sub команд
             }
         }
     }//radio
@@ -351,8 +394,9 @@ class Command {
      * @throws Exception
      * @throws Throwable
      */
-
-    private static function download(Deferred $deferred, string $link): void { //ToDO Добавить проверку на плейлист(работа с очередью) добавить проверку на продолжительность и вес файла
+    //ToDO Добавить проверку на продолжительность и вес файла
+    //ToDO Загрузка стопит трансляцию сделать отдельным скриптом - процессом или проверить код
+    private static function download(Deferred $deferred, string $link): void {
 
         $deferredDownload = new Deferred();
 
@@ -373,10 +417,9 @@ class Command {
                     if(file_exists('ffmpeg/yt-dlp.exe')){
                         $yt->setBinPath('ffmpeg/yt-dlp.exe');
 
-
                         $deferredGenerateString = new Deferred();
                         self::$loop->addTimer(0,function () use ($deferredGenerateString){
-                            self::generateRandomString($deferredGenerateString, 20);
+                            self::generateRandomString($deferredGenerateString);
                         });
 
                         $deferredGenerateString->promise()->then(function ($name) use ($deferred, $yt, $link){
@@ -386,7 +429,7 @@ class Command {
                                     ->downloadPath('/music')
                                     ->extractAudio(true)
                                     ->audioFormat($audioFormat)
-                                    ->audioQuality('0') // 0 is best
+                                    ->audioQuality('0') // 0 is the best
                                     ->output($name.'.%(ext)s')
                                     ->url($link)
                             );
@@ -409,14 +452,9 @@ class Command {
                 }
             });
         });
-
-//            $yt->onProgress(static function (?string $progressTarget, string $percentage, string $size, string $speed, string $eta, ?string $totalTime): void {
-//              echo "Download percentage: $percentage" . ' Speed: ' . $speed . PHP_EOL;
-//            });
-
     }//download
 
-    private static function checkUrl(string $url) : bool{
+    private static function checkUrl(string $url) : bool {
         if($url[0] == 'h')
         if($url[1] == 't')
         if($url[2] == 't')
@@ -449,6 +487,7 @@ class Command {
         if($url[29] == '?')
         if($url[30] == 'v')
         if($url[31] == '=')
+        if(strlen($url) == 43)
             return true;
         return false;
     } //ToDo Переписать
@@ -458,7 +497,7 @@ class Command {
      * @throws Throwable
      */
 
-    private static function getUsersChannel(Deferred $deferred, $userId) : void{
+    private static function getUsersChannel(Deferred $deferred, $userId) : void {
         try {
             if(isset(self::$voiceStates[0])){
                 $size = sizeof(self::$voiceStates);
@@ -481,7 +520,7 @@ class Command {
      * @throws Throwable
      */
 
-    private static function getEnabledCommands(Deferred $deferred) : void  {
+    private static function getEnabledCommands(Deferred $deferred) : void {
 
         self::$loop->addTimer(0,function () use ($deferred){
             try {
@@ -507,12 +546,12 @@ class Command {
      * @throws Throwable
      */
 
-    private static function generateRandomString(Deferred $deferred, int $strength) : void {
+    private static function generateRandomString(Deferred $deferred) : void {
         try {
             $permitted_chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
             $input_length = strlen($permitted_chars);
             $random_string = '';
-            for($i = 0; $i < $strength; $i++) {
+            for($i = 0; $i < 20; $i++) {
                 $random_character = $permitted_chars[mt_rand(0, $input_length - 1)];
                 $random_string .= $random_character;
             }
@@ -523,8 +562,37 @@ class Command {
         }
     }
 
-    private static function deleteAudio(Deferred $deferred, $path) : void {
+    private static function deleteAudio(?int $mode = 0) : void {
+        self::$loop->addTimer(0,function () use ($mode) {
+            $files = glob(self::$audioPath);
+            foreach ($files as $file){
+                if (is_file($file) && ($file == self::$audioPath || $mode == 1)) {
+                    unlink($file);
+                    self::$audioPath = '';
+                    self::$queue = [];
+                }
+            }
+        });
+    }
 
+    private static function setQueue($audioPath) : void {
+        if(self::$queueCounter == 0 && !isset(self::$queue[1])){
+            self::$queue[0] = self::$audioPath;
+            self::$queue[1] = $audioPath;
+        }
+        else{
+            $size = sizeof(self::$queue);
+            self::$queue[$size] = $audioPath;
+        }
+    }
+
+    private static function checkQueue() : void{
+        if(isset(self::$queue[self::$queueCounter + 1])){
+            self::$queueCounter++;
+            self::$audioPath = self::$queue[self::$queueCounter];
+        }
+        elseif(self::$queueCounter + 1 == sizeof(self::$queue))
+            self::$queueCounter++;
     }
 
     /**
@@ -533,48 +601,12 @@ class Command {
      */
 
     private static function test() : void{
+//        $process = new Process('exec /r yt-dlp -h');
+//        $process->start();
 
-//        $deferred = new Deferred();
-//
-//        $promise = $deferred->promise()->then(function ($result){
-//            echo 'result: ' . $result;
+//        $process->stdout->on('end', function () use ($process){
+//            $process->terminate();
+//            echo 'ended';
 //        });
-//
-//        self::$loop->addTimer(0,function (/*$timer Нужно если periodicTimer */) use ($deferred){
-//            //self::$loop->cancelTimer($timer); // Нужно если PeriodicTimer
-//            $commandList = CommandList::$commands;
-//            $size = sizeof($commandList);
-//
-//            for ($i = 0; $i < $size; $i++) {
-//                if (!$commandList[$i]['enable']) {
-//                    unset($commandList[$i]);
-//                }
-//            }
-//
-//            sort($commandList);
-//
-//            $embed = embeds::createEmbed('Список команд:','',6738196);
-//            $size = sizeof($commandList);
-//
-//            for ($i = 0; $i < $size; $i++) {
-//                $embed['description'] .= $commandList[$i]['command'] . PHP_EOL;
-//                $embed['description'] .= $commandList[$i]['description'] . PHP_EOL . PHP_EOL;
-//            }
-//
-//            $embed['description'] .= 'Разработчик бота: <@216058366689148930>';
-//            $msg = MessageBuilder::new()
-//                ->setContent('')
-//                ->addEmbed($embed)
-//                ->setTts(false)
-//                ->setReplyTo(self::$message);
-//
-//            self::$channel->sendMessage($msg)->then(function () use ($deferred){
-//                $deferred->resolve('Сообщение отправлено');
-//            })->otherwise(function () use ($deferred){
-//                $deferred->reject('Сообщение не отправлено');
-//            });
-//        });
-//
     }
-
 }
