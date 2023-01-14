@@ -1,0 +1,45 @@
+VoiceClient.php
+
+    private function checkForFFmpeg(): bool
+    {
+        $binaries = [
+            'ffmpeg',
+            'ffplay',
+            'ffprobe',
+        ];
+
+        foreach ($binaries as $binary) {
+            $output = $this->checkForExecutable($binary);
+
+            if ($output !== null) {
+                $this->ffmpeg = $output;
+
+                return true;
+            }
+        }
+
+        $this->emit('error', [new FFmpegNotFoundException('No FFmpeg binary was found.')]);
+
+        return false;
+    }
+
+
+    private static function checkForExecutable(string $executable): ?string
+    {
+        $which = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN' ? 'where' : 'command -v';
+        $executable = rtrim((string) explode(PHP_EOL, shell_exec("{$which} /r ffmpeg {$executable}"))[0]);
+
+        return is_executable($executable) ? $executable : null;
+    }
+
+
+                $nextTime = $this->startTime + (20.0 / 1000.0) * $loops;
+                $delay = $nextTime - microtime(true);
+
+                $this->readOpusTimer = $this->loop->addTimer($delay, $readOpus);
+
+Guild.php
+
+        protected $fillable = [
+            'id',
+            'voice_states',

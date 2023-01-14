@@ -1,5 +1,8 @@
 <?php
 
+//ToDo поискать про define private на public
+//ToDo поискать скачивание плейлистов по тегам
+
 use Discord\Builders\MessageBuilder;
 use Discord\Discord;
 use Discord\Helpers\Deferred;
@@ -9,10 +12,9 @@ use Discord\Parts\Channel\Message;
 use Discord\Parts\Guild\Guild;
 use Discord\Voice\VoiceClient;
 use React\EventLoop\LoopInterface;
-use YoutubeDl\Options;
-use YoutubeDl\YoutubeDl;
 use Psr\Log\LoggerInterface;
 use React\ChildProcess\Process;
+use React\EventLoop\TimerInterface;
 
 class Command {
 
@@ -26,7 +28,11 @@ class Command {
     private static string $audioPath = '';
     private static array $queue = [];
     private static int $queueCounter = 0;
-    private static array $args;
+    private static array $args; //ToDo совместить аргументы по имени метода и добавить newArgs , который подменяют аргументы после обработчика
+    private static array $radioArgs; //ToDO Временный костыль, перенесется в args (нет ничего более постоянного чем временное 14/01/2023 :D)
+    private static bool $radioRepeat = false;
+    private static bool $radioStateDownload = false;
+    private static bool $radioCansel = false;
     private static array $voiceStates;
     private static bool $radioState = false;
 
@@ -222,34 +228,58 @@ class Command {
      * @throws NoPermissionsException
      */
 
-    //ToDO возможно добавить проверку на cansel и не перезаписывать аргументы, если их нет в списке sub-command
     //ToDO потестить как ведет себя, когда командуешь из других комнат
+    //ToDo написать команды next и past + добавить поддержу листов(джемов)
     private static function radio(): void {
-
+        if(((self::$args[1] == 'add' && !self::$radioState) || (self::$args[1] == 'y')) && isset(self::$radioArgs[0])){
+            self::$args = self::$radioArgs;
+            if(self::$args[1] == 'y'){
+                self::sendRadioErrorToChannel(0);
+            }
+            else{
+                self::sendRadioErrorToChannel(1);
+            }
+            return;
+        }
+        else{
+            self::$radioArgs = self::$args;
+        }
         $deferred = new Deferred();
 
         $play = function () use (&$play) {
             self::$radioState = true;
             self::$vc->playFile(self::$audioPath)->done(function () use (&$play){
-                $size = sizeof(self::$queue);
-                if(isset(self::$args[1]) && self::$args[1] == 'repeat'){
-                    self::$radioState = true;
-                    self::$loop->addTimer(0, $play);
+                if(self::$radioCansel){
+                    self::$radioState = false;
+                    self::$radioCansel = false;
+                    self::deleteAudio();
+                    self::$vc->close();
+                    return;
                 }
-                elseif(self::$queueCounter != $size){
-                    self::checkQueue();
+                $size = sizeof(self::$queue);
+                self::checkQueue();
+                if(self::$queueCounter != $size || self::$radioRepeat){
                     self::$radioState = true;
                     self::$loop->addTimer(0, $play);
                 }
                 else{
-                    self::$radioState = false;
-                    if($size > 0){
-                        self::deleteAudio(1);
+                    if(self::$radioStateDownload){
+                        $deferred = new Deferred();
+                        self::awaitDownload($deferred);
+                        $deferred->promise()->then(function () use (&$play){
+                            self::checkQueue();
+                            self::$loop->addTimer(0, $play);
+                        })->otherwise(function () use ($size){
+                            self::$radioState = false;
+                            self::deleteAudio();
+                            self::$vc->close();
+                        });
                     }
                     else{
+                        self::$radioState = false;
                         self::deleteAudio();
+                        self::$vc->close();
                     }
-                    self::$vc->close();
                 }
             });
         };
@@ -269,22 +299,12 @@ class Command {
             })->otherwise(function (Exception | Throwable | int | string $e){
                 if(is_int($e) && $e == 0){
                     self::$loop->addTimer(0, function (){
-                        $msg = MessageBuilder::new()
-                            ->setContent('')
-                            ->addEmbed(embeds::createEmbed('Необходимо зайти в голосовой канал','<@' . self::$message['author']['id'] . '>',6738196))
-                            ->setTts(false)
-                            ->setReplyTo(self::$message);
-                        self::$channel->sendMessage($msg);
+                        self::sendRadioErrorToChannel(2);
                     });
                 }
                 elseif(is_string($e)){
                     self::$logger->critical($e);
-                    $msg = MessageBuilder::new()
-                        ->setContent('')
-                        ->addEmbed(embeds::createEmbed('Произошла ошибка при загрузке','<@' . self::$message['author']['id'] . '>',6738196))
-                        ->setTts(false)
-                        ->setReplyTo(self::$message);
-                    self::$channel->sendMessage($msg);
+                    self::sendRadioErrorToChannel(3);
                 }
                 else{
                     self::$logger->critical($e->getMessage());
@@ -295,12 +315,6 @@ class Command {
             if(isset(self::$args[1])){
                 if(self::$args[1] == 'stop'){
                     self::$radioState = false;
-                    if(sizeof(self::$queue) > 0){
-                        self::deleteAudio(1);
-                    }
-                    else{
-                        self::deleteAudio();
-                    }
                     self::deleteAudio();
                     self::$vc->close();
                 }
@@ -311,9 +325,72 @@ class Command {
                     self::$vc->unpause();
                 }
                 elseif(self::$args[1] == 'skip'){
-                    //ToDO Написать алгоритм для скипа n количества песен
+                    if(self::$radioStateDownload){
+                        $deferred = new Deferred();
+                        self::awaitDownload($deferred);
+                        $deferred->promise()->then(function (){
+                            self::$loop->addTimer(0,function () use (&$play) {
+                                if(isset(self::$queue[self::$queueCounter + 1])){
+                                    self::resetRadioOptions(0);
+                                    self::$vc->stop();
+                                    self::$loop->addTimer(0, $play);
+                                }
+                                else{
+                                    self::sendRadioErrorToChannel(4);
+                                }
+                            });
+                        })->otherwise(function (){
+                            self::sendRadioErrorToChannel(5);
+                        });
+                    }
+                    else{
+                        self::$loop->addTimer(0,function () use (&$play) {
+                            if(isset(self::$queue[self::$queueCounter + 1])){
+                                self::resetRadioOptions(0);
+                                self::$vc->stop();
+                                self::$loop->addTimer(0, $play);
+                            }
+                            else{
+                                self::sendRadioErrorToChannel(4);
+                            }
+                        });
+                    }
                 }
-                elseif((self::$args[1] == 'y' || self::$args[1] == 'у') && isset(self::$args[2]) && !self::$radioState || (self::$args[1] == 'add' && self::$radioState)){
+                elseif(self::$args[1] == 'prev'){
+                    self::$loop->addTimer(0,function () use (&$play) {
+                        if(isset(self::$queue[self::$queueCounter - 1])){
+                            self::resetRadioOptions(1);
+                            self::$vc->stop();
+                            self::$loop->addTimer(0, $play);
+                        }
+                        else{
+                            self::sendRadioErrorToChannel(4);
+                        }
+                    });
+                }
+                elseif(self::$args[1] == 'cansel'){
+                    if(self::$radioStateDownload){
+                        $deferred = new Deferred();
+                        self::awaitDownload($deferred);
+                        $deferred->promise()->then(function (){
+                            self::$radioCansel = true;
+                        })->otherwise(function (){
+                            self::sendRadioErrorToChannel(5);
+                        });
+                    }
+                    else{
+                        self::$radioCansel = true;
+                    }
+                }
+                elseif(self::$args[1] == 'repeat'){
+                    if(!self::$radioRepeat){
+                        self::$radioRepeat = true;
+                    }
+                    else{
+                        self::$radioRepeat = false;
+                    }
+                }
+                elseif(self::$args[1] == 'y' && isset(self::$args[2]) && !self::$radioState || (self::$args[1] == 'add' && self::$radioState)){
 
                     $deferred = new Deferred();
 
@@ -349,22 +426,12 @@ class Command {
                         if(is_int($e)){
                             if($e == 0){
                                 self::$loop->addTimer(0, function (){
-                                    $msg = MessageBuilder::new()
-                                        ->setContent('')
-                                        ->addEmbed(embeds::createEmbed('Некорректная ссылка','<@' . self::$message['author']['id'] . '>',6738196))
-                                        ->setTts(false)
-                                        ->setReplyTo(self::$message);
-                                    self::$channel->sendMessage($msg);
+                                    self::sendRadioErrorToChannel(6);
                                 });
                             }
                             elseif($e == 1){
                                 self::$loop->addTimer(0, function (){
-                                    $msg = MessageBuilder::new()
-                                        ->setContent('')
-                                        ->addEmbed(embeds::createEmbed('ffmpeg/yt-dlp.exe не найден','<@' . self::$message['author']['id'] . '>',6738196))
-                                        ->setTts(false)
-                                        ->setReplyTo(self::$message);
-                                    self::$channel->sendMessage($msg);
+                                    self::sendRadioErrorToChannel(7);
                                 });
                             }
                         }
@@ -374,13 +441,9 @@ class Command {
                     });
                 }
                 else{
+                    self::$args = self::$radioArgs;//Восстановление аргументов, если команды не было в sub commands
                     self::$loop->addTimer(0,function (){
-                        $msg = MessageBuilder::new()
-                            ->setContent('')
-                            ->addEmbed(embeds::createEmbed('Параметр: ' . self::$args[1] . ' не найден.' ,'<@' . self::$message['author']['id'] . '>',6738196))
-                            ->setTts(false)
-                            ->setReplyTo(self::$message);
-                        self::$channel->sendMessage($msg);
+                        self::sendRadioErrorToChannel(8);
                     });
                 }
             }
@@ -394,8 +457,7 @@ class Command {
      * @throws Exception
      * @throws Throwable
      */
-    //ToDO Добавить проверку на продолжительность и вес файла
-    //ToDO Загрузка стопит трансляцию сделать отдельным скриптом - процессом или проверить код
+
     private static function download(Deferred $deferred, string $link): void {
 
         $deferredDownload = new Deferred();
@@ -413,39 +475,28 @@ class Command {
         $deferredDownload->promise()->then(function ($link) use ($deferred){
             self::$loop->addTimer(0, function () use ($link, $deferred){
                 try {
-                    $yt = new YoutubeDl();
-                    if(file_exists('ffmpeg/yt-dlp.exe')){
-                        $yt->setBinPath('ffmpeg/yt-dlp.exe');
+                    $deferredGenerateString = new Deferred();
+                    self::$loop->addTimer(0, function () use ($deferredGenerateString) {
+                        self::generateRandomString($deferredGenerateString);
+                    });
 
-                        $deferredGenerateString = new Deferred();
-                        self::$loop->addTimer(0,function () use ($deferredGenerateString){
-                            self::generateRandomString($deferredGenerateString);
-                        });
-
-                        $deferredGenerateString->promise()->then(function ($name) use ($deferred, $yt, $link){
-                            $audioFormat = 'mp3';
-                            $collection = $yt->download(
-                                Options::create()
-                                    ->downloadPath('/music')
-                                    ->extractAudio(true)
-                                    ->audioFormat($audioFormat)
-                                    ->audioQuality('0') // 0 is the best
-                                    ->output($name.'.%(ext)s')
-                                    ->url($link)
-                            );
-                            foreach ($collection->getVideos() as $audio) {
-                                if ($audio->getError() !== null) {
-                                    $deferred->reject('Error downloading video: ' . $audio->getError());
-                                }
-                                else{
-                                    $deferred->resolve('music/'.$name.'.'.$audioFormat);
+                    $deferredGenerateString->promise()->then(function ($name) use ($deferred, $link) {
+                        self::$radioStateDownload = true;
+                        $process = new Process("php bot/classes/extProcess/ytDownload.php $name $link", null, null, array());
+                        $process->start();
+                        $process->on('exit', function ($res) use ($deferred, $name) {
+                            self::$radioStateDownload = false;
+                            if (file_exists('music/' . $name . '.mp3')) {
+                                $deferred->resolve('music/' . $name . '.mp3');
+                                if(file_exists('music/' . $name . '.info.json')){
+                                    self::regJson('music/' . $name . '.info.json');
                                 }
                             }
+                            elseif ($res != 0) {
+                                $deferred->reject($res);
+                            }
                         });
-                    }
-                    else{
-                        $deferred->reject(1);
-                    }
+                    });
                 }
                 catch (Exception | Throwable $e){
                     $deferred->reject($e);
@@ -562,16 +613,17 @@ class Command {
         }
     }
 
-    private static function deleteAudio(?int $mode = 0) : void {
-        self::$loop->addTimer(0,function () use ($mode) {
-            $files = glob(self::$audioPath);
+    private static function deleteAudio() : void { //ToDo Когда появятся директории
+        self::$loop->addTimer(0,function () {
+            $files = glob('music/*');
             foreach ($files as $file){
-                if (is_file($file) && ($file == self::$audioPath || $mode == 1)) {
+                if (is_file($file)) {
                     unlink($file);
-                    self::$audioPath = '';
-                    self::$queue = [];
                 }
             }
+            self::$audioPath = '';
+            self::$queue = [];
+            self::$radioArgs = [];
         });
     }
 
@@ -587,26 +639,125 @@ class Command {
     }
 
     private static function checkQueue() : void{
-        if(isset(self::$queue[self::$queueCounter + 1])){
+        if(!self::$radioRepeat){
             self::$queueCounter++;
+        }
+        if(isset(self::$queue[self::$queueCounter])){
             self::$audioPath = self::$queue[self::$queueCounter];
         }
-        elseif(self::$queueCounter + 1 == sizeof(self::$queue))
-            self::$queueCounter++;
+        else{
+            self::$queueCounter = sizeof(self::$queue);
+        }
+    }
+
+    private static function regJson(string $path) : void {
+        if(file_exists($path)){
+            self::$loop->addTimer(0,function () use ($path) {
+                $json = file_get_contents($path);
+                $json = json_decode($json);
+                $newJson = (object)[];
+                $newJson->title = $json->title;
+                $newJson->duration_string = $json->duration_string;
+                $newJson->filesize = $json->filesize;
+                $newJson->fulltitle = $json->fulltitle;
+                file_put_contents($path, json_encode($newJson));
+            });
+        }
+    }
+
+    private static function awaitDownload(Deferred $deferred) : void {
+        $counter = 0;
+        self::$loop->addPeriodicTimer(5,function (TimerInterface $timer) use ($deferred, &$counter){
+            if(!self::$radioStateDownload){
+                self::$loop->cancelTimer($timer);
+                $deferred->resolve();
+            }
+            if($counter >= 2){
+                self::$loop->cancelTimer($timer);
+                $deferred->reject();
+            }
+            $counter++;
+        });
+    }
+
+    private static function resetRadioOptions(int $mode) : void {
+        if($mode == 0){
+            self::prepareQueueForSkip();
+        }
+        else{
+            self::prepareQueueForPrev();
+        }
+        self::$queueCounter = 0;
+        self::$radioState = false;
+        self::$radioRepeat = false;
+        self::$audioPath = self::$queue[0];
+        self::$radioArgs = [];
+    }
+
+    private static function prepareQueueForSkip() : void {
+        $count =self::$queueCounter;
+        for($i = 0; $i <= $count;$i++){
+            unset(self::$queue[$i]);
+        }
+        sort(self::$queue);
+    }
+
+    private static function prepareQueueForPrev() : void {
+        $count =self::$queueCounter;
+        for($i = $count;$i > 0;$i--){
+            unset(self::$queue[$i]);
+        }
+        sort(self::$queue);
     }
 
     /**
-     * @throws Exception
-     * @throws Throwable
+     * @throws NoPermissionsException
      */
 
-    private static function test() : void{
-//        $process = new Process('exec /r yt-dlp -h');
-//        $process->start();
+    private static function sendRadioErrorToChannel(int $from) : void {
+        if($from == 0){
+            $title = 'Музыка уже играет, воспользуйтесь командой /radio add';
+        }
+        elseif($from == 1){
+            $title = 'Подождите пока бот зайдет в канал';
+        }
+        elseif($from == 2){
+            $title = 'Необходимо зайти в голосовой канал';
+        }
+        elseif($from == 3){
+            $title = 'Произошла ошибка при загрузке';
+        }
+        elseif($from == 4){
+            $title = 'Очередь пуста, используйте команду /radio add';
+        }
+        elseif($from == 5){
+            $title = 'Данный параметр недоступен во время загрузки файла, попробуйте позже';
+        }
+        elseif($from == 6){
+            $title = 'Некорректная ссылка';
+        }
+        elseif($from == 7){
+            $title = 'ffmpeg/yt-dlp.exe не найден';
+        }
+        elseif($from == 8){
+            $title = 'Параметр: ' . self::$args[1] . ' не найден.';
+        }
+        else{
+            $title = 'Неизвестная ошибка';
+        }
+        $msg = MessageBuilder::new()
+            ->setContent('')
+            ->addEmbed(embeds::createEmbed($title,'<@' . self::$message['author']['id'] . '>',6738196))
+            ->setTts(false)
+            ->setReplyTo(self::$message);
+        self::$channel->sendMessage($msg);
+    }
 
-//        $process->stdout->on('end', function () use ($process){
-//            $process->terminate();
-//            echo 'ended';
-//        });
+    private static function test() : void {
+            $process = new Process("php bot/classes/extProcess/test.php", null, null, array());
+            $process->start();
+            $process->on('exit', function ($res){
+                self::$logger->info('test.php завершился кодом состояния: ' . $res);
+            });
     }
 }

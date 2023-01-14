@@ -4,7 +4,7 @@ class BotOptions {
 
     private static array $botInfo = [
         'version' => '1.0.0',
-        'build' => 15,
+        'build' => 16,
     ];
 
     private static array $botValidateChannels = [
@@ -27,6 +27,7 @@ class BotOptions {
     ];
 
     private static int $botGuildId = 190505006359773194;
+    private static bool $botTestMode = true;//ToDO задействовать в настройках логгера и define
 
     public static function getBotOption($name) : array | string {
         return self::$$name;

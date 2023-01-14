@@ -208,3 +208,4 @@ composer.json
 *.exe
 *.rar
 *.png
+*.json
