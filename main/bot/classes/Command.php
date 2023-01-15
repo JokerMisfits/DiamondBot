@@ -231,7 +231,7 @@ class Command {
     //ToDO потестить как ведет себя, когда командуешь из других комнат
     //ToDo написать команды next и past + добавить поддержу листов(джемов)
     private static function radio(): void {
-        if(((self::$args[1] == 'add' && !self::$radioState) || (self::$args[1] == 'y')) && isset(self::$radioArgs[0])){
+        if(((self::$args[1] == 'add' && !self::$radioState) || (self::$args[1] == 'y')) && isset(self::$radioArgs[0]) && self::$radioState){
             self::$args = self::$radioArgs;
             if(self::$args[1] == 'y'){
                 self::sendRadioErrorToChannel(0);
@@ -425,6 +425,9 @@ class Command {
                     })->otherwise(function (Exception | Throwable | int $e){
                         if(is_int($e)){
                             if($e == 0){
+
+                                var_dump(self::$radioState);
+
                                 self::$loop->addTimer(0, function (){
                                     self::sendRadioErrorToChannel(6);
                                 });
