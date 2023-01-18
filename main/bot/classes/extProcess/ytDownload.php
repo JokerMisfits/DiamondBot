@@ -1,6 +1,7 @@
 <?php
 
 include_once __DIR__ . '/../../../../vendor/autoload.php';
+include_once __DIR__ . '/../../../autoLoads/autoload_classes.php';
 
 use YoutubeDl\Options;
 use YoutubeDl\YoutubeDl;
@@ -12,6 +13,16 @@ if(isset($argv[1]) && isset($argv[2])){
     if(file_exists('ffmpeg/yt-dlp.exe')){
         $yt->setBinPath('ffmpeg/yt-dlp.exe');
         $audioFormat = 'mp3';
+
+        if (file_exists('music/' . $name . '.mp3')) {
+            try {
+                $name = Command::generateRandomString(null);
+            }
+            catch (Throwable $e) {
+                throw $e;
+            }
+        }
+
         $collection = $yt->download(
             Options::create()
                 ->downloadPath('/music')

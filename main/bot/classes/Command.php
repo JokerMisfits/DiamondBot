@@ -15,9 +15,9 @@ use React\EventLoop\LoopInterface;
 use Psr\Log\LoggerInterface;
 use React\ChildProcess\Process;
 use React\EventLoop\TimerInterface;
+use Discord\Helpers\Collection;
 
 class Command {
-
     private static Discord $discord;
     private static Guild $guild;
     private static LoggerInterface $logger;
@@ -35,6 +35,7 @@ class Command {
     private static bool $radioCansel = false;
     private static array $voiceStates;
     private static bool $radioState = false;
+    private static bool $radioStarted = false;
 
     /**
      * @throws Exception
@@ -231,6 +232,12 @@ class Command {
     //ToDO потестить как ведет себя, когда командуешь из других комнат
     //ToDo написать команды next и past + добавить поддержу листов(джемов)
     private static function radio(): void {
+        if(!self::$radioStarted){
+            self::$radioStarted = true;
+            self::$loop->addPeriodicTimer(10,function (){
+                self::updateVoiceStates();
+            });
+        }
         if(((self::$args[1] == 'add' && !self::$radioState) || (self::$args[1] == 'y')) && isset(self::$radioArgs[0]) && self::$radioState){
             self::$args = self::$radioArgs;
             if(self::$args[1] == 'y'){
@@ -437,6 +444,11 @@ class Command {
                                     self::sendRadioErrorToChannel(7);
                                 });
                             }
+                            elseif($e == 2){
+                                self::$loop->addTimer(0, function (){
+                                    self::sendRadioErrorToChannel(9);
+                                });
+                            }
                         }
                         else{
                             self::$logger->critical($e->getMessage());
@@ -477,32 +489,63 @@ class Command {
 
         $deferredDownload->promise()->then(function ($link) use ($deferred){
             self::$loop->addTimer(0, function () use ($link, $deferred){
-                try {
-                    $deferredGenerateString = new Deferred();
-                    self::$loop->addTimer(0, function () use ($deferredGenerateString) {
-                        self::generateRandomString($deferredGenerateString);
-                    });
 
-                    $deferredGenerateString->promise()->then(function ($name) use ($deferred, $link) {
-                        self::$radioStateDownload = true;
-                        $process = new Process("php bot/classes/extProcess/ytDownload.php $name $link", null, null, array());
-                        $process->start();
-                        $process->on('exit', function ($res) use ($deferred, $name) {
-                            self::$radioStateDownload = false;
-                            if (file_exists('music/' . $name . '.mp3')) {
-                                $deferred->resolve('music/' . $name . '.mp3');
-                                if(file_exists('music/' . $name . '.info.json')){
-                                    self::regJson('music/' . $name . '.info.json');
-                                }
-                            }
-                            elseif ($res != 0) {
-                                $deferred->reject($res);
-                            }
+                if(strlen($link) == 43){
+                    try {
+                        $deferredGenerateString = new Deferred();
+                        self::$loop->addTimer(0, function () use ($deferredGenerateString) {
+                            self::generateRandomString($deferredGenerateString);
                         });
-                    });
+
+                        $deferredGenerateString->promise()->then(function ($name) use ($deferred, $link) {
+                            self::$radioStateDownload = true;
+                            $process = new Process("php bot/classes/extProcess/ytDownload.php $name $link", null, null, array());
+                            $process->start();
+                            $process->on('exit', function ($res) use ($deferred, $name) {
+                                self::$radioStateDownload = false;
+                                if (file_exists('music/' . $name . '.mp3')) {
+                                    $deferred->resolve('music/' . $name . '.mp3');
+                                    if(file_exists('music/' . $name . '.info.json')){
+                                        self::regJson('music/' . $name . '.info.json');
+                                    }
+                                }
+                                elseif ($res != 0) {
+                                    $deferred->reject($res);
+                                }
+                            });
+                        });
+                    }
+                    catch (Exception | Throwable $e){
+                        $deferred->reject($e);
+                    }
                 }
-                catch (Exception | Throwable $e){
-                    $deferred->reject($e);
+                elseif(strlen($link) >= 43){
+                        $deferredGenerateString = new Deferred();
+                        self::$loop->addTimer(0, function () use ($deferredGenerateString) {
+                            self::generateRandomString($deferredGenerateString);
+                        });
+
+                        $deferredGenerateString->promise()->then(function ($name) use ($deferred, $link) {
+                            self::$radioStateDownload = true;
+                            $process = new Process("php bot/classes/extProcess/ytDownload.php $name $link", null, null, array());
+                            $process->start();
+                            $process->on('exit', function ($res) use ($deferred, $name) {
+                                self::$radioStateDownload = false;
+                                if (file_exists('music/' . $name . '.mp3')) {
+                                    self::$queue[sizeof(self::$queue)] = 'music/' . $name . '.mp3';
+                                    if(file_exists('music/' . $name . '.info.json')){
+                                        self::regJson('music/' . $name . '.info.json');
+                                    }
+                                }
+                                elseif ($res != 0) {
+                                    $deferred->reject($res);
+                                }
+                                else{
+                                    $deferred->reject(9);
+                                }
+                            });
+                        });
+                    $deferred->resolve();
                 }
             });
         });
@@ -541,7 +584,7 @@ class Command {
         if($url[29] == '?')
         if($url[30] == 'v')
         if($url[31] == '=')
-        if(strlen($url) == 43)
+        if(strlen($url) >= 43)
             return true;
         return false;
     } //ToDo Переписать
@@ -600,7 +643,7 @@ class Command {
      * @throws Throwable
      */
 
-    private static function generateRandomString(Deferred $deferred) : void {
+    public static function generateRandomString(?Deferred $deferred) : null | string {
         try {
             $permitted_chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
             $input_length = strlen($permitted_chars);
@@ -609,11 +652,19 @@ class Command {
                 $random_character = $permitted_chars[mt_rand(0, $input_length - 1)];
                 $random_string .= $random_character;
             }
-            $deferred->resolve($random_string);
+
+            if(isset($deferred)){
+                $deferred->resolve($random_string);
+            }
+            else{
+                return $random_string;
+            }
+
         }
         catch (Throwable | Exception $e){
-            $deferred->resolve($e);
+            $deferred->reject($e);
         }
+        return null;
     }
 
     private static function deleteAudio() : void { //ToDo Когда появятся директории
@@ -745,6 +796,9 @@ class Command {
         elseif($from == 8){
             $title = 'Параметр: ' . self::$args[1] . ' не найден.';
         }
+        elseif($from == 9){
+            $title = 'Ошибка загрузки';
+        }
         else{
             $title = 'Неизвестная ошибка';
         }
@@ -756,8 +810,41 @@ class Command {
         self::$channel->sendMessage($msg);
     }
 
+    private static function updateVoiceStates() : void{
+
+        $description = '$audioPath ' . self::$audioPath . PHP_EOL;
+        if(isset(self::$queue[0])){
+            $size = sizeof(self::$queue);
+            for($i = 0;$i < $size;$i++){
+                $description .= $i . ' $queue ' . self::$queue[$i] . PHP_EOL;
+            }
+        }
+        if(isset(self::$args[0])){
+            $size = sizeof(self::$args);
+            for($i = 0;$i < $size;$i++){
+                $description .= $i . ' $args ' . self::$args[$i] . PHP_EOL;
+            }
+        }
+        if(isset(self::$radioArgs[0])){
+            $size = sizeof(self::$radioArgs);
+            for($i = 0;$i < $size;$i++){
+                $description .= $i . ' $radioArgs: ' . self::$radioArgs[$i] . PHP_EOL;
+            }
+        }
+        $description .= '$radioRepeat ' . self::$radioRepeat . PHP_EOL;
+        $description .= '$radioStateDownload ' . self::$radioStateDownload . PHP_EOL;
+        $description .= '$radioCansel ' . self::$radioCansel . PHP_EOL;
+        $description .= '$radioState ' . self::$radioState . PHP_EOL;
+
+        $embed = embeds::createEmbed('VoiceStates', $description,6738196);
+        self::$channel->messages->fetch(1064526488231235655)->done(function (Message $message) use ($embed) {
+            $message->edit(MessageBuilder::new()->addEmbed($embed));
+        });
+
+    }
+
     private static function test() : void {
-            $process = new Process("php bot/classes/extProcess/test.php", null, null, array());
+            $process = new Process("php bot/classes/extProcess/test.php ", null, null, array());
             $process->start();
             $process->on('exit', function ($res){
                 self::$logger->info('test.php завершился кодом состояния: ' . $res);
