@@ -209,3 +209,4 @@ composer.json
 *.rar
 *.png
 *.json
+main/bot/classes/BotOptions.php

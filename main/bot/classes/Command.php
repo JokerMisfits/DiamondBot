@@ -15,7 +15,6 @@ use React\EventLoop\LoopInterface;
 use Psr\Log\LoggerInterface;
 use React\ChildProcess\Process;
 use React\EventLoop\TimerInterface;
-use Discord\Helpers\Collection;
 
 class Command {
     private static Discord $discord;
@@ -36,6 +35,9 @@ class Command {
     private static array $voiceStates;
     private static bool $radioState = false;
     private static bool $radioStarted = false;
+
+    private static bool $checkForNewFile = false;
+    private static int $checkForNewFileCounter = 0;
 
     /**
      * @throws Exception
@@ -255,6 +257,9 @@ class Command {
 
         $play = function () use (&$play) {
             self::$radioState = true;
+
+            //self::$audioPath = str_replace(' ','',self::$audioPath);
+
             self::$vc->playFile(self::$audioPath)->done(function () use (&$play){
                 if(self::$radioCansel){
                     self::$radioState = false;
@@ -413,7 +418,10 @@ class Command {
                             });
                         }
                         else{
-                            self::$audioPath = $audioPath;
+                            if(!isset(self::$audioPath) && isset($audioPath)){
+                                self::$audioPath = $audioPath;
+                            }
+
                             $deferred = new Deferred();
 
                             self::$loop->addTimer(0,function () use ($deferred){
@@ -520,33 +528,32 @@ class Command {
                     }
                 }
                 elseif(strlen($link) >= 43){
-                        $deferredGenerateString = new Deferred();
-                        self::$loop->addTimer(0, function () use ($deferredGenerateString) {
-                            self::generateRandomString($deferredGenerateString);
+                        self::$radioStateDownload = true;
+
+                        self::$loop->addPeriodicTimer(15,function ($timer) use ($deferred){
+                            self::checkForNewFile($deferred);
+                            if(!self::$checkForNewFile){
+                                self::$checkForNewFileCounter++;
+                                if(self::$checkForNewFileCounter >= 3){
+                                    self::$checkForNewFileCounter = 0;
+                                    if(self::$audioPath == self::$queue[0]){
+                                        unset(self::$queue[0]);
+                                        sort(self::$queue);
+                                    }
+                                    self::$loop->cancelTimer($timer);
+                                }
+                            }
+                            self::$checkForNewFile = false;
                         });
 
-                        $deferredGenerateString->promise()->then(function ($name) use ($deferred, $link) {
-                            self::$radioStateDownload = true;
-                            $process = new Process("php bot/classes/extProcess/ytDownload.php $name $link", null, null, array());
-                            $process->start();
-                            $process->on('exit', function ($res) use ($deferred, $name) {
-                                self::$radioStateDownload = false;
-                                if (file_exists('music/' . $name . '.mp3')) {
-                                    self::$queue[sizeof(self::$queue)] = 'music/' . $name . '.mp3';
-                                    if(file_exists('music/' . $name . '.info.json')){
-                                        self::regJson('music/' . $name . '.info.json');
-                                    }
-                                }
-                                elseif ($res != 0) {
-                                    $deferred->reject($res);
-                                }
-                                else{
-                                    $deferred->reject(9);
-                                }
-                            });
+                        $process = new Process("php bot/classes/extProcess/ytDownload.php $link", null, null, array());
+                        $process->start();
+                        $process->on('exit', function () {
+                            self::$radioStateDownload = false;
                         });
-                    $deferred->resolve();
+
                 }
+
             });
         });
     }//download
@@ -643,7 +650,7 @@ class Command {
      * @throws Throwable
      */
 
-    public static function generateRandomString(?Deferred $deferred) : null | string {
+    public static function generateRandomString(?Deferred $deferred) : null | string { // Удалить
         try {
             $permitted_chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
             $input_length = strlen($permitted_chars);
@@ -841,6 +848,45 @@ class Command {
             $message->edit(MessageBuilder::new()->addEmbed($embed));
         });
 
+    }
+
+    private static function checkForNewFile(Deferred $deferred) : void {
+
+        $files = glob('music/*.mp3');
+
+        var_dump($files);
+        $size1 = sizeof($files);
+
+        for($i = 0;$i < $size1;$i++){
+            $startI = $i;
+            $size = sizeof(self::$queue);
+            for ($j = 0;$j < $size;$j++){
+                if(self::$queue[$j] == $files[$i]){
+                    $i++;
+                }
+            }
+            if($startI == $i){
+                if(isset(self::$queue)){
+                    self::$queue[$size] = $files[$i];
+                }
+                else{
+                    self::$queue[0] = $files[$i];
+                }
+                self::regJson('music/' . str_replace('.mp3', '.info.json',$files[$i]));
+                self::$checkForNewFile = true;
+            }
+        }
+
+        var_dump(self::$queue);
+
+        if(self::$audioPath == '' && isset(self::$queue[0])){
+            self::$audioPath = self::$queue[0];
+            if(!self::$radioState){
+                self::$loop->addTimer(5,function () use ($deferred){
+                    $deferred->resolve();
+                });
+            }
+        }
     }
 
     private static function test() : void {
