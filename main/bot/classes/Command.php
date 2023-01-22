@@ -1,6 +1,5 @@
 <?php
 
-//ToDo поискать про define private на public
 //ToDo поискать скачивание плейлистов по тегам
 
 use Discord\Builders\MessageBuilder;
@@ -27,17 +26,17 @@ class Command {
     private static string $audioPath = '';
     private static array $queue = [];
     private static int $queueCounter = 0;
-    private static array $args; //ToDo совместить аргументы по имени метода и добавить newArgs , который подменяют аргументы после обработчика
-    private static array $radioArgs; //ToDO Временный костыль, перенесется в args (нет ничего более постоянного чем временное 14/01/2023 :D)
+    private static array $args;
+    private static array $radioArgs;
     private static bool $radioRepeat = false;
     private static bool $radioStateDownload = false;
     private static bool $radioCansel = false;
     private static array $voiceStates;
     private static bool $radioState = false;
     private static bool $radioStarted = false;
-
     private static bool $checkForNewFile = false;
-    private static int $checkForNewFileCounter = 0;
+
+    private static bool $updateVoiceStatesRun = false;
 
     /**
      * @throws Exception
@@ -232,13 +231,17 @@ class Command {
      */
 
     //ToDO потестить как ведет себя, когда командуешь из других комнат
-    //ToDo написать команды next и past + добавить поддержу листов(джемов)
     private static function radio(): void {
         if(!self::$radioStarted){
             self::$radioStarted = true;
-            self::$loop->addPeriodicTimer(10,function (){
-                self::updateVoiceStates();
-            });
+
+            if (self::$message['channel_id'] == 700021655325507604 && !self::$updateVoiceStatesRun){
+                self::$updateVoiceStatesRun = true;
+                self::$loop->addPeriodicTimer(10,function (){
+                    self::updateVoiceStates();
+                });
+            }
+
         }
         if(((self::$args[1] == 'add' && !self::$radioState) || (self::$args[1] == 'y')) && isset(self::$radioArgs[0]) && self::$radioState){
             self::$args = self::$radioArgs;
@@ -257,9 +260,6 @@ class Command {
 
         $play = function () use (&$play) {
             self::$radioState = true;
-
-            //self::$audioPath = str_replace(' ','',self::$audioPath);
-
             self::$vc->playFile(self::$audioPath)->done(function () use (&$play){
                 if(self::$radioCansel){
                     self::$radioState = false;
@@ -336,6 +336,29 @@ class Command {
                 elseif(self::$args[1] == 'unpause'){
                     self::$vc->unpause();
                 }
+                elseif(self::$args[1] == 'next'){
+                    if(isset(self::$queue[self::$queueCounter + 1])){
+                        self::$queueCounter++;
+                        self::$audioPath = self::$queue[self::$queueCounter];
+                        self::$vc->stop();
+                        self::$loop->addTimer(0, $play);
+                    }
+                    else{
+                        self::sendRadioErrorToChannel(10);
+                    }
+                }
+                elseif(self::$args[1] == 'past'){
+                    if(isset(self::$queue[self::$queueCounter - 1])){
+                        self::$queueCounter--;
+                        self::$audioPath = self::$queue[self::$queueCounter];
+                        self::$vc->stop();
+                        self::$loop->addTimer(0, $play);
+                    }
+                    else{
+                        self::sendRadioErrorToChannel(11);
+                    }
+
+                }
                 elseif(self::$args[1] == 'skip'){
                     if(self::$radioStateDownload){
                         $deferred = new Deferred();
@@ -400,6 +423,26 @@ class Command {
                     }
                     else{
                         self::$radioRepeat = false;
+                    }
+                }
+                elseif(self::$args[1] == 'queue'){
+                    //ToDo вывод очереди с title из json file
+                }
+                elseif(self::$args[1] == 'to' && isset(self::$args[2])){
+                    (int)$counter = self::$args[2];
+                    if(is_int($counter)){
+                        if(isset(self::$queue[$counter])){
+                            self::$queueCounter = $counter;
+                            self::$audioPath = self::$queue[self::$queueCounter];
+                            self::$vc->stop();
+                            self::$loop->addTimer(0, $play);
+                        }
+                        else{
+                            self::sendRadioErrorToChannel(12);
+                        }
+                    }
+                    else{
+                        self::sendRadioErrorToChannel(13);
                     }
                 }
                 elseif(self::$args[1] == 'y' && isset(self::$args[2]) && !self::$radioState || (self::$args[1] == 'add' && self::$radioState)){
@@ -498,47 +541,21 @@ class Command {
         $deferredDownload->promise()->then(function ($link) use ($deferred){
             self::$loop->addTimer(0, function () use ($link, $deferred){
 
-                if(strlen($link) == 43){
+                if(strlen($link) >= 43){
                     try {
-                        $deferredGenerateString = new Deferred();
-                        self::$loop->addTimer(0, function () use ($deferredGenerateString) {
-                            self::generateRandomString($deferredGenerateString);
-                        });
-
-                        $deferredGenerateString->promise()->then(function ($name) use ($deferred, $link) {
-                            self::$radioStateDownload = true;
-                            $process = new Process("php bot/classes/extProcess/ytDownload.php $name $link", null, null, array());
-                            $process->start();
-                            $process->on('exit', function ($res) use ($deferred, $name) {
-                                self::$radioStateDownload = false;
-                                if (file_exists('music/' . $name . '.mp3')) {
-                                    $deferred->resolve('music/' . $name . '.mp3');
-                                    if(file_exists('music/' . $name . '.info.json')){
-                                        self::regJson('music/' . $name . '.info.json');
-                                    }
-                                }
-                                elseif ($res != 0) {
-                                    $deferred->reject($res);
-                                }
-                            });
-                        });
-                    }
-                    catch (Exception | Throwable $e){
-                        $deferred->reject($e);
-                    }
-                }
-                elseif(strlen($link) >= 43){
                         self::$radioStateDownload = true;
 
-                        self::$loop->addPeriodicTimer(15,function ($timer) use ($deferred){
+                        self::$loop->addPeriodicTimer(10,function ($timer) use ($deferred){
+                            $counter = 0;
                             self::checkForNewFile($deferred);
                             if(!self::$checkForNewFile){
-                                self::$checkForNewFileCounter++;
-                                if(self::$checkForNewFileCounter >= 3){
-                                    self::$checkForNewFileCounter = 0;
+                                $counter++;
+                                if($counter >= 3){
                                     if(self::$audioPath == self::$queue[0]){
                                         unset(self::$queue[0]);
-                                        sort(self::$queue);
+                                        if(isset(self::$queue[1])){
+                                            sort(self::$queue);
+                                        }
                                     }
                                     self::$loop->cancelTimer($timer);
                                 }
@@ -552,8 +569,11 @@ class Command {
                             self::$radioStateDownload = false;
                         });
 
+                    }
+                    catch (Exception | Throwable $e){
+                        $deferred->reject($e);
+                    }
                 }
-
             });
         });
     }//download
@@ -650,30 +670,6 @@ class Command {
      * @throws Throwable
      */
 
-    public static function generateRandomString(?Deferred $deferred) : null | string { // Удалить
-        try {
-            $permitted_chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-            $input_length = strlen($permitted_chars);
-            $random_string = '';
-            for($i = 0; $i < 20; $i++) {
-                $random_character = $permitted_chars[mt_rand(0, $input_length - 1)];
-                $random_string .= $random_character;
-            }
-
-            if(isset($deferred)){
-                $deferred->resolve($random_string);
-            }
-            else{
-                return $random_string;
-            }
-
-        }
-        catch (Throwable | Exception $e){
-            $deferred->reject($e);
-        }
-        return null;
-    }
-
     private static function deleteAudio() : void { //ToDo Когда появятся директории
         self::$loop->addTimer(0,function () {
             $files = glob('music/*');
@@ -756,7 +752,7 @@ class Command {
     }
 
     private static function prepareQueueForSkip() : void {
-        $count =self::$queueCounter;
+        $count = self::$queueCounter;
         for($i = 0; $i <= $count;$i++){
             unset(self::$queue[$i]);
         }
@@ -806,6 +802,18 @@ class Command {
         elseif($from == 9){
             $title = 'Ошибка загрузки';
         }
+        elseif($from == 10){
+            $title = 'Конец очереди, попробуйте /radio past';
+        }
+        elseif($from == 11){
+            $title = 'Конец очереди, попробуйте /radio next';
+        }
+        elseif($from == 12){
+            $title = 'Вашего номера нет в очереди, чтобы узнать номер нужной вам песни воспользуйтесь командой: /radio queue';
+        }
+        elseif($from == 13){
+            $title = 'Номер песни должен быть числом!';
+        }
         else{
             $title = 'Неизвестная ошибка';
         }
@@ -853,8 +861,6 @@ class Command {
     private static function checkForNewFile(Deferred $deferred) : void {
 
         $files = glob('music/*.mp3');
-
-        var_dump($files);
         $size1 = sizeof($files);
 
         for($i = 0;$i < $size1;$i++){
@@ -862,7 +868,8 @@ class Command {
             $size = sizeof(self::$queue);
             for ($j = 0;$j < $size;$j++){
                 if(self::$queue[$j] == $files[$i]){
-                    $i++;
+                    $startI++;
+                    break;
                 }
             }
             if($startI == $i){
@@ -872,23 +879,18 @@ class Command {
                 else{
                     self::$queue[0] = $files[$i];
                 }
-                self::regJson('music/' . str_replace('.mp3', '.info.json',$files[$i]));
+                self::regJson(str_replace('.mp3', '',$files[$i]).'.info.json');
                 self::$checkForNewFile = true;
             }
         }
 
-        var_dump(self::$queue);
-
         if(self::$audioPath == '' && isset(self::$queue[0])){
             self::$audioPath = self::$queue[0];
             if(!self::$radioState){
-                self::$loop->addTimer(5,function () use ($deferred){
-                    $deferred->resolve();
-                });
+                $deferred->resolve();
             }
         }
     }
-
     private static function test() : void {
             $process = new Process("php bot/classes/extProcess/test.php ", null, null, array());
             $process->start();
