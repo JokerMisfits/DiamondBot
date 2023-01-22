@@ -12,7 +12,6 @@ if(isset($argv[1])){
     if(file_exists('ffmpeg/yt-dlp.exe')){
         $yt->setBinPath('ffmpeg/yt-dlp.exe');
         $audioFormat = 'mp3';
-
         $collection = $yt->download(
             Options::create()
                 ->downloadPath('/music')
@@ -22,6 +21,7 @@ if(isset($argv[1])){
                 ->audioQuality('0') // 0 is the best
                 ->maxDownloads(10)
                 ->output('%(id)s.%(ext)s')
+                //->playlistRandom(true)//ToDO Проверить удалить или добавить как опцию
                 ->url($link)
         );
         foreach ($collection->getVideos() as $audio) {

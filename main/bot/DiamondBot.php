@@ -12,7 +12,6 @@ use React\EventLoop\LoopInterface;
 use React\Promise\Deferred;
 
 class DiamondBot {
-
     public static mysqli $mysqli;
     public static LoggerInterface $logger;
     public static array $voiceStates;
@@ -34,104 +33,71 @@ class DiamondBot {
 
         $discord->on('ready', function (Discord $discord) {
             self::$loop = $discord->getloop();
-            self::$loop->addTimer(0, function () use ($discord){
-                try {
-                    self::$logger = $discord->getLogger();
-                    self::$mysqli = MysqliConnection::initMysqli();
-                    $status = new Activity($discord);
-                    $status->name = BotOptions::getBotOption('botStatus')['name'];
-                    $status->type = BotOptions::getBotOption('botStatus')['type'];
-                    $status->url = BotOptions::getBotOption('botStatus')['url'];
-                    $discord->updatePresence($status);
-                    unset($status);
-                    self::$guild = $discord->guilds->get('id', BotOptions::getBotOption('botGuildId'));
+            try {
+                self::$logger = $discord->getLogger();
+                self::$mysqli = MysqliConnection::initMysqli();
+                $status = new Activity($discord);
+                $status->name = BotOptions::getBotOption('botStatus')['name'];
+                $status->type = BotOptions::getBotOption('botStatus')['type'];
+                $status->url = BotOptions::getBotOption('botStatus')['url'];
+                $discord->updatePresence($status);
+                unset($status);
+                self::$guild = $discord->guilds->get('id', BotOptions::getBotOption('botGuildId'));
 
-                    if(is_array(self::$guild->voice_states)){
-                        self::$voiceStates =  self::$guild->voice_states;
+                if(is_array(self::$guild->voice_states)){
+                    self::$voiceStates =  self::$guild->voice_states;
+                }
+                else{
+                    exit('Не подключены voice_states в Guild.php');
+                }
+                self::$discord = &$discord;
+            }
+            catch (Exception | Throwable $e){
+                exit($e->getMessage());
+            }
+        });
+
+        $discord->on(Event::VOICE_STATE_UPDATE, function (VoiceStateUpdate $state) {
+            self::$loop->addTimer(0, function () use ($state){
+                if(isset(self::$voiceStates[0])){
+                    $size = sizeof(self::$voiceStates);
+                    if($state->channel_id != null){
+                        for($i = 0;$i < $size;$i++){
+                            if(self::$voiceStates[$i]->user_id == $state->user_id){
+                                self::$voiceStates[$i]->channel_id = $state->channel_id;
+                                return;
+                            }
+                        }
                     }
                     else{
-                        exit('Не подключены voice_states в Guild.php');
+                        for($i = 0;$i < $size;$i++){
+                            if(self::$voiceStates[$i]->user_id == $state->user_id){
+                                unset(self::$voiceStates[$i]);
+                                sort(self::$voiceStates);
+                                return;
+                            }
+                        }
                     }
-                    self::$discord = &$discord;
+                    self::$voiceStates[$size] = $state;
                 }
-                catch (Exception | Throwable $e){
-                    exit($e->getMessage());
+                else{
+                    self::$voiceStates[0] = $state;
                 }
             });
         });
 
-        $discord->on(Event::VOICE_STATE_UPDATE, function (VoiceStateUpdate $state){
-
+        $discord->on(Event::MESSAGE_CREATE, function (Message $message, Discord $discord) {
             $deferred = new Deferred();
-
-            self::$loop->addTimer(0, function () use ($deferred,$state){
-                try {
-                    if(isset(self::$voiceStates[0])){
-                        $size = sizeof(self::$voiceStates);
-
-                        if($state->channel_id != null){
-                            for($i = 0;$i < $size;$i++){
-                                if(self::$voiceStates[$i]->user_id == $state->user_id){
-                                    self::$voiceStates[$i]->channel_id = $state->channel_id;
-                                    $deferred->resolve();
-                                    return;
-                                }
-                            }
-                        }
-                        else{
-                            for($i = 0;$i < $size;$i++){
-                                if(self::$voiceStates[$i]->user_id == $state->user_id){
-                                    unset(self::$voiceStates[$i]);
-                                    sort(self::$voiceStates);
-                                    $deferred->resolve();
-                                    return;
-                                }
-                            }
-                        }
-
-                        self::$voiceStates[$size] = $state;
-                    }
-                    else{
-                        self::$voiceStates[0] = $state;
-                    }
-                    $deferred->resolve();
+            if(in_array((int)$message->channel_id, BotOptions::getBotOption('botValidateChannels'))){
+                $channel = $discord->getChannel($message['channel_id']);
+                if (str_contains($message->content, "<@" . BotOptions::getBotOption('botId') . ">")) {
+                    $deferred->resolve($channel);
                 }
-                catch (Exception | Throwable $e){
-                    $deferred->reject($e);
-                }
-            });
-
-            $deferred->promise()->otherwise(function (Exception | Throwable $e){
-                self::$logger->critical($e->getMessage());
-            });
-
-        });
-
-        $discord->on(Event::MESSAGE_CREATE, function (Message $message, Discord $discord){
-
-            $deferred = new Deferred();
-
-            self::$loop->addTimer(0, function () use ($message, $discord, $deferred){
-                try {
-                    if(in_array((int)$message->channel_id, BotOptions::getBotOption('botValidateChannels'))){
-                        $channel = $discord->getChannel($message['channel_id']);
-
-                        if (str_contains($message->content, "<@" . BotOptions::getBotOption('botId') . ">")) {
-                            $deferred->resolve($channel);
-                        }
-                    }
-                }
-                catch (Exception | Throwable $e){
-                    $deferred->reject($e);
-                }
-            });
-
+            }
             $deferred->promise()->then(function ($channel) use ($message){
                 self::$loop->addTimer(0,function () use ($channel, $message){
                     Command::init($channel, $message);
                 });
-            })->otherwise(function (Exception | Throwable $e){
-                self::$logger->critical($e->getMessage());
             });
         });
 

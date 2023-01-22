@@ -3,11 +3,23 @@
 
 class embeds
 {
-    public static function createEmbed(string $title, string $description,int $color) : array{
+    public static function createEmbed(string $title, string $description,int $color) : array {
         return [
             'title' => $title,
             'description' => $description,
             'color' => $color,
+        ];
+    }
+    public static function createEmbedWithImage(string $title, string $description,string $image, int $color) : array {
+        return [
+            'title' => $title,
+            'description' => $description,
+            'color' => $color,
+            'thumbnail' => ['url' => $image],
+            'image' => ['url' => $image],
+            'footer' => [
+                'icon_url' => $image,
+            ],
         ];
     }
 

@@ -1,7 +1,6 @@
 <?php
 
 //ToDo поискать скачивание плейлистов по тегам
-//ToDo проверить влияет ли луп на io если нет, почистить код
 
 use Discord\Builders\MessageBuilder;
 use Discord\Discord;
@@ -59,63 +58,54 @@ class Command {
 
         $deferred->promise()->then(function ($result){
             if($result == 0){
-                self::$loop->addTimer(0, function (){
                     self::help();
-                });
             }
             elseif($result == 1){
-                self::$loop->addTimer(0, function (){
                     Command::init(self::$channel, self::$message,1);
-                });
             }
             else{
-                self::$loop->addTimer(0, function () use ($result){
                     self::$result();
-                });
             }
         })->otherwise(function (Exception | Throwable $e){
             self::$logger->critical($e->getMessage());
         });
+        try {
+            if ($checked == 0) {
+                self::$message->content = str_replace('<@' . BotOptions::getBotOption('botId') . '> ', '', self::$message->content);
+                if (self::$message->content[0] == '/') {
+                    $commandList = CommandList::$commands;
+                    $size = sizeof($commandList);
+                    $args = explode(" ", self::$message->content);
 
-        self::$loop->addTimer(0,function () use ($deferred, $checked){
-            try {
-                if ($checked == 0) {
-                    self::$message->content = str_replace('<@' . BotOptions::getBotOption('botId') . '> ', '', self::$message->content);
-                    if (self::$message->content[0] == '/') {
-                        $commandList = CommandList::$commands;
-                        $size = sizeof($commandList);
-                        $args = explode(" ", self::$message->content);
+                    if (isset($args[1])) {
+                        $command = $args[0];
+                    }
+                    else {
+                        $command = self::$message->content;
+                    }
 
-                        if (isset($args[1])) {
-                            $command = $args[0];
-                        }
-                        else {
-                            $command = self::$message->content;
-                        }
-
-                        for ($i = 0; $i < $size; $i++) {
-                            if ($command == $commandList[$i]['command']) { //ToDO Добавить метод на доступные команды + проверка на права
-                                self::$args = $args;
-                                $deferred->resolve(1);
-                            }
+                    for ($i = 0; $i < $size; $i++) {
+                        if ($command == $commandList[$i]['command']) { //ToDO Добавить метод на доступные команды + проверка на права
+                            self::$args = $args;
+                            $deferred->resolve(1);
                         }
                     }
-                    $deferred->resolve(0);
                 }
-                else {
-                    if (isset(self::$args[1])) {
-                        $func = trim(self::$args[0], "/");
-                    } else {
-                        $func = trim(self::$message->content, "/");
+                $deferred->resolve(0);
+            }
+            else {
+                if (isset(self::$args[1])) {
+                    $func = trim(self::$args[0], "/");
+                } else {
+                    $func = trim(self::$message->content, "/");
 
-                    }
-                    $deferred->resolve($func);
                 }
+                $deferred->resolve($func);
             }
-            catch (Exception | Throwable $e){
-                $deferred->reject($e);
-            }
-        });
+        }
+        catch (Exception | Throwable $e){
+            $deferred->reject($e);
+        }
     }
 
     /**
@@ -125,36 +115,12 @@ class Command {
      */
 
     private static function roll(): void {
-
-        $deferred = new Deferred();
-
-        self::$loop->addTimer(0, function () use ($deferred){
-            try {
-                $msg = MessageBuilder::new()
-                    ->setContent('')
-                    ->addEmbed(embeds::createEmbed('Rolled: ' . rand(0, 100),'<@' . self::$message['author']['id'] . '>',6738196))
-                    ->setTts()
-                    ->setReplyTo(self::$message);
-
-                $deferred->resolve($msg);
-            }
-            catch (Exception | Throwable $e){
-                $deferred->reject($e);
-            }
-        });
-
-        $deferred->promise()->then(function ($msg){
-            self::$loop->addTimer(0,function () use ($msg){
-                try {
-                    self::$channel->sendMessage($msg);
-                }
-                catch (Exception | Throwable $e){
-                    self::$logger->critical($e->getMessage());
-                }
-            });
-        })->otherwise(function (Exception | Throwable $e){
-            self::$logger->critical($e->getMessage());
-        });
+        $msg = MessageBuilder::new()
+            ->setContent('')
+            ->addEmbed(embeds::createEmbed('Rolled: ' . rand(0, 100),'<@' . self::$message['author']['id'] . '>',6738196))
+            ->setTts()
+            ->setReplyTo(self::$message);
+        self::$channel->sendMessage($msg);
     }//Roll command
 
     /**
@@ -164,26 +130,10 @@ class Command {
      */
 
     private static function clear(): void {
-
-        $deferred = new Deferred();
-
-        $deferred->promise()->then(function ($count){
+        $count = self::$args[1] ?? 1;
+        self::$channel->limitDelete($count)->done(function () use ($count) {
             self::$channel->sendMessage('', false,
                 embeds::createEmbed('Сообщений успешно удалено ' . $count,'<@' . self::$message['author']['id'] . '>',6738196));
-        })->otherwise(function (Exception | Throwable $e){
-            self::$logger->critical($e->getMessage());
-        });
-
-        self::$loop->addTimer(0,function () use ($deferred){
-            try {
-                $count = self::$args[1] ?? 1;
-                self::$channel->limitDelete($count)->done(function () use ($deferred, $count){
-                    $deferred->resolve($count);
-                });
-            }
-            catch (Exception | Throwable $e){
-                $deferred->reject($e);
-            }
         });
     }//Clear command
 
@@ -196,30 +146,22 @@ class Command {
     private static function help(): void {
 
         $deferred = new Deferred();
-
-        self::$loop->addTimer(0, function () use ($deferred){
-            self::getEnabledCommands($deferred);
-        });
+        self::getEnabledCommands($deferred);
 
         $deferred->promise()->then(function ($commandList){
-            self::$loop->addTimer(0,function () use ($commandList){
-                $embed = embeds::createEmbed('Список команд:','',6738196);
-                $size = sizeof($commandList);
-
-                for ($i = 0; $i < $size; $i++) {
-                    $embed['description'] .= $commandList[$i]['command'] . PHP_EOL;
-                    $embed['description'] .= $commandList[$i]['description'] . PHP_EOL . PHP_EOL;
-                }
-
-                $embed['description'] .= 'Разработчик бота: <@216058366689148930>';
-                $msg = MessageBuilder::new()
-                    ->setContent('')
-                    ->addEmbed($embed)
-                    ->setTts()
-                    ->setReplyTo(self::$message);
-
-                self::$channel->sendMessage($msg);
-            });
+            $embed = embeds::createEmbed('Список команд:','',6738196);
+            $size = sizeof($commandList);
+            for ($i = 0; $i < $size; $i++) {
+                $embed['description'] .= $commandList[$i]['command'] . PHP_EOL;
+                $embed['description'] .= $commandList[$i]['description'] . PHP_EOL . PHP_EOL;
+            }
+            $embed['description'] .= 'Разработчик бота: <@216058366689148930>';
+            $msg = MessageBuilder::new()
+                ->setContent('')
+                ->addEmbed($embed)
+                ->setTts()
+                ->setReplyTo(self::$message);
+            self::$channel->sendMessage($msg);
         })->otherwise(function (Exception | Throwable $e){
             self::$logger->critical($e->getMessage());
         });
@@ -273,7 +215,7 @@ class Command {
                 self::checkQueue();
                 if(self::$queueCounter != $size || self::$radioRepeat){
                     self::$radioState = true;
-                    self::$loop->addTimer(0, $play);
+                    $play();
                 }
                 else{
                     if(self::$radioStateDownload){
@@ -281,7 +223,7 @@ class Command {
                         self::awaitDownload($deferred);
                         $deferred->promise()->then(function () use (&$play){
                             self::checkQueue();
-                            self::$loop->addTimer(0, $play);
+                            $play();
                         })->otherwise(function () use ($size){
                             self::$radioState = false;
                             self::deleteAudio();
@@ -298,22 +240,15 @@ class Command {
         };
 
         if(!self::$radioState && self::$audioPath != ''){
-            self::$loop->addTimer(0,function () use ($deferred){
                 self::getUsersChannel($deferred, self::$message->author->id);
-            });
-
             $deferred->promise()->then(function (Channel $channel) use ($play){
-                self::$loop->addTimer(0,function () use ($channel, $play){
                     self::$discord->joinVoiceChannel($channel)->done(function (VoiceClient $vc) use ($play){
                         self::$vc = $vc;
-                        self::$loop->addTimer(0, $play);
+                        $play();
                     });
-                });
             })->otherwise(function (Exception | Throwable | int | string $e){
                 if(is_int($e) && $e == 0){
-                    self::$loop->addTimer(0, function (){
-                        self::sendRadioErrorToChannel(2);
-                    });
+                    self::sendRadioErrorToChannel(2);
                 }
                 elseif(is_string($e)){
                     self::$logger->critical($e);
@@ -342,7 +277,7 @@ class Command {
                         self::$queueCounter++;
                         self::$audioPath = self::$queue[self::$queueCounter];
                         self::$vc->stop();
-                        self::$loop->addTimer(0, $play);
+                        $play();
                     }
                     else{
                         self::sendRadioErrorToChannel(10);
@@ -353,7 +288,7 @@ class Command {
                         self::$queueCounter--;
                         self::$audioPath = self::$queue[self::$queueCounter];
                         self::$vc->stop();
-                        self::$loop->addTimer(0, $play);
+                        $play();
                     }
                     else{
                         self::sendRadioErrorToChannel(11);
@@ -364,45 +299,40 @@ class Command {
                     if(self::$radioStateDownload){
                         $deferred = new Deferred();
                         self::awaitDownload($deferred);
-                        $deferred->promise()->then(function (){
-                            self::$loop->addTimer(0,function () use (&$play) {
-                                if(isset(self::$queue[self::$queueCounter + 1])){
-                                    self::resetRadioOptions(0);
-                                    self::$vc->stop();
-                                    self::$loop->addTimer(0, $play);
-                                }
-                                else{
-                                    self::sendRadioErrorToChannel(4);
-                                }
-                            });
+                        $deferred->promise()->then(function () use (&$play){
+                            if(isset(self::$queue[self::$queueCounter + 1])){
+                                self::resetRadioOptions(0);
+                                self::$vc->stop();
+                                $play();
+                            }
+                            else{
+                                self::sendRadioErrorToChannel(4);
+                            }
+
                         })->otherwise(function (){
                             self::sendRadioErrorToChannel(5);
                         });
                     }
                     else{
-                        self::$loop->addTimer(0,function () use (&$play) {
-                            if(isset(self::$queue[self::$queueCounter + 1])){
-                                self::resetRadioOptions(0);
-                                self::$vc->stop();
-                                self::$loop->addTimer(0, $play);
-                            }
-                            else{
-                                self::sendRadioErrorToChannel(4);
-                            }
-                        });
-                    }
-                }
-                elseif(self::$args[1] == 'prev'){
-                    self::$loop->addTimer(0,function () use (&$play) {
-                        if(isset(self::$queue[self::$queueCounter - 1])){
-                            self::resetRadioOptions(1);
+                        if(isset(self::$queue[self::$queueCounter + 1])){
+                            self::resetRadioOptions(0);
                             self::$vc->stop();
-                            self::$loop->addTimer(0, $play);
+                            $play();
                         }
                         else{
                             self::sendRadioErrorToChannel(4);
                         }
-                    });
+                    }
+                }
+                elseif(self::$args[1] == 'prev'){
+                    if(isset(self::$queue[self::$queueCounter - 1])){
+                        self::resetRadioOptions(1);
+                        self::$vc->stop();
+                        $play();
+                    }
+                    else{
+                        self::sendRadioErrorToChannel(4);
+                    }
                 }
                 elseif(self::$args[1] == 'cansel'){
                     if(self::$radioStateDownload){
@@ -427,7 +357,12 @@ class Command {
                     }
                 }
                 elseif(self::$args[1] == 'queue'){
-                    self::setQueueMetaData();
+                    if(self::$radioStateDownload){
+                        self::sendRadioErrorToChannel(14);
+                    }
+                    else{
+                        self::setQueueMetaData();
+                    }
                 }
                 elseif(self::$args[1] == 'to' && isset(self::$args[2])){
                 $counter = (int)self::$args[2];
@@ -435,69 +370,53 @@ class Command {
                         self::$queueCounter = $counter;
                         self::$audioPath = self::$queue[self::$queueCounter];
                         self::$vc->stop();
-                        self::$loop->addTimer(0, $play);
+                        $play();
                     }
                     else{
                         self::sendRadioErrorToChannel(12);
                     }
                 }
                 elseif(self::$args[1] == 'now'){
-                    self::sendPlayNow();
+                    if(self::$radioState){
+                        self::sendPlayNow();
+                    }
+                    else{
+                        self::sendRadioErrorToChannel(1);
+                    }
                 }
                 elseif(self::$args[1] == 'y' && isset(self::$args[2]) && !self::$radioState || (self::$args[1] == 'add' && self::$radioState)){
 
                     $deferred = new Deferred();
+                    self::download($deferred,self::$args[2]);
 
-                    self::$loop->addTimer(0, function () use ($deferred){
-                        self::download($deferred,self::$args[2]);
-                    });
-
-                    $deferred->promise()->then(function ($audioPath) use ($play){
-
+                    $deferred->promise()->then(function ($audioPath) use (&$play){
                         if(self::$args[1] == 'add'){
-                            self::$loop->addTimer(0,function () use ($audioPath) {
-                                self::setQueue($audioPath);
-                            });
+                            self::setQueue($audioPath);
                         }
                         else{
                             if(!isset(self::$audioPath) && isset($audioPath)){
                                 self::$audioPath = $audioPath;
                             }
-
                             $deferred = new Deferred();
+                            self::getUsersChannel($deferred, self::$message->author->id);
 
-                            self::$loop->addTimer(0,function () use ($deferred){
-                                self::getUsersChannel($deferred, self::$message->author->id);
-                            });
-
-                            $deferred->promise()->then(function (Channel $channel) use ($play){
-                                self::$loop->addTimer(0,function () use ($channel, $play){
-                                    self::$discord->joinVoiceChannel($channel)->done(function (VoiceClient $vc) use ($play){
-                                        self::$vc = $vc;
-                                        self::$loop->addTimer(0, $play);
-                                    });
+                            $deferred->promise()->then(function (Channel $channel) use (&$play){
+                                self::$discord->joinVoiceChannel($channel)->done(function (VoiceClient $vc) use (&$play){
+                                    self::$vc = $vc;
+                                    $play();
                                 });
                             });
                         }
                     })->otherwise(function (Exception | Throwable | int $e){
                         if(is_int($e)){
                             if($e == 0){
-
-                                var_dump(self::$radioState);
-
-                                self::$loop->addTimer(0, function (){
-                                    self::sendRadioErrorToChannel(6);
-                                });
+                                self::sendRadioErrorToChannel(6);
                             }
                             elseif($e == 1){
-                                self::$loop->addTimer(0, function (){
-                                    self::sendRadioErrorToChannel(7);
-                                });
+                                self::sendRadioErrorToChannel(7);
                             }
                             elseif($e == 2){
-                                self::$loop->addTimer(0, function (){
-                                    self::sendRadioErrorToChannel(9);
-                                });
+                                self::sendRadioErrorToChannel(9);
                             }
                         }
                         else{
@@ -507,9 +426,7 @@ class Command {
                 }
                 else{
                     self::$args = self::$radioArgs;//Восстановление аргументов, если команды не было в sub commands
-                    self::$loop->addTimer(0,function (){
-                        self::sendRadioErrorToChannel(8);
-                    });
+                    self::sendRadioErrorToChannel(8);
                 }
             }
             else{
@@ -527,53 +444,46 @@ class Command {
 
         $deferredDownload = new Deferred();
 
-        self::$loop->addTimer(0,function () use ($deferred, $deferredDownload, $link){
-            if(!self::checkUrl($link)){
-                $deferred->reject(0);
-                $deferredDownload->reject(0);
-            }
-            else{
-                $deferredDownload->resolve($link);
-            }
-        });
+        if(!self::checkUrl($link)){
+            $deferred->reject(0);
+            $deferredDownload->reject(0);
+        }
+        else{
+            $deferredDownload->resolve($link);
+        }
 
         $deferredDownload->promise()->then(function ($link) use ($deferred){
-            self::$loop->addTimer(0, function () use ($link, $deferred){
-
-                if(strlen($link) >= 43){
-                    try {
-                        self::$radioStateDownload = true;
-
-                        self::$loop->addPeriodicTimer(10,function ($timer) use ($deferred){
-                            $counter = 0;
-                            self::checkForNewFile($deferred);
-                            if(!self::$checkForNewFile){
-                                $counter++;
-                                if($counter >= 3){
-                                    if(self::$audioPath == self::$queue[0]){
-                                        unset(self::$queue[0]);
-                                        if(isset(self::$queue[1])){
-                                            sort(self::$queue);
-                                        }
+            if(strlen($link) >= 43){
+                try {
+                    self::$radioStateDownload = true;
+                    self::$loop->addPeriodicTimer(10,function ($timer) use ($deferred){
+                        $counter = 0;
+                        self::checkForNewFile($deferred);
+                        if(!self::$checkForNewFile){
+                            $counter++;
+                            if($counter >= 3){
+                                if(self::$audioPath == self::$queue[0]){
+                                    unset(self::$queue[0]);
+                                    if(isset(self::$queue[1])){
+                                        sort(self::$queue);
                                     }
-                                    self::$loop->cancelTimer($timer);
                                 }
+                                self::$loop->cancelTimer($timer);
                             }
-                            self::$checkForNewFile = false;
-                        });
+                        }
+                        self::$checkForNewFile = false;
+                    });
 
-                        $process = new Process("php bot/classes/extProcess/ytDownload.php $link", null, null, array());
-                        $process->start();
-                        $process->on('exit', function () {
-                            self::$radioStateDownload = false;
-                        });
-
-                    }
-                    catch (Exception | Throwable $e){
-                        $deferred->reject($e);
-                    }
+                    $process = new Process("php bot/classes/extProcess/ytDownload.php $link", null, null, array());
+                    $process->start();
+                    $process->on('exit', function () {
+                        self::$radioStateDownload = false;
+                    });
                 }
-            });
+                catch (Exception | Throwable $e){
+                    $deferred->reject($e);
+                }
+            }
         });
     }//download
 
@@ -644,24 +554,20 @@ class Command {
      */
 
     private static function getEnabledCommands(Deferred $deferred) : void {
-
-        self::$loop->addTimer(0,function () use ($deferred){
-            try {
-                $commandList = CommandList::$commands;
-                $size = sizeof($commandList);
-
-                for ($i = 0; $i < $size; $i++) {
-                    if (!$commandList[$i]['enable']) {
-                        unset($commandList[$i]);
-                    }
+        try {
+            $commandList = CommandList::$commands;
+            $size = sizeof($commandList);
+            for ($i = 0; $i < $size; $i++) {
+                if (!$commandList[$i]['enable']) {
+                    unset($commandList[$i]);
                 }
-                sort($commandList);
-                $deferred->resolve($commandList);
             }
-            catch (Exception | Throwable $e){
-                $deferred->reject($e);
-            }
-        });
+            sort($commandList);
+            $deferred->resolve($commandList);
+        }
+        catch (Exception | Throwable $e){
+            $deferred->reject($e);
+        }
     }
 
     /**
@@ -707,18 +613,22 @@ class Command {
 
     private static function regJson(string $path) : void {
         if(file_exists($path)){
-            self::$loop->addTimer(0,function () use ($path) {
-                $json = file_get_contents($path);
-                $json = json_decode($json);
-                $newJson = (object)[];
-                $newJson->title = $json->title;
-                $newJson->duration_string = $json->duration_string;
-                if(isset($json->filesize)){
-                    $newJson->filesize = $json->filesize;
-                }
-                $newJson->fulltitle = $json->fulltitle;
-                file_put_contents($path, json_encode($newJson));
-            });
+            $json = file_get_contents($path);
+            $json = json_decode($json);
+            $newJson = (object)[];
+            $newJson->title = $json->title;
+            $newJson->description = $json->description;
+            $newJson->view_count = $json->view_count;
+            $newJson->like_count = $json->like_count;
+            $newJson->channel_follower_count = $json->channel_follower_count;
+            $newJson->upload_date = $json->upload_date;
+            $newJson->duration_string = $json->duration_string;
+            $newJson->logo = 'https://i.ytimg.com/vi/'.$json->id.'/maxresdefault.jpg';
+            if(isset($json->filesize)){
+                $newJson->filesize = $json->filesize;
+            }
+            $newJson->fulltitle = $json->fulltitle;
+            file_put_contents($path, json_encode($newJson));
         }
     }
 
@@ -813,6 +723,9 @@ class Command {
         }
         elseif($from == 13){
             $title = 'Очередь пуста';
+        }
+        elseif($from == 14){
+            $title = 'Очередь формируется, попробуйте позже';
         }
         else{
             $title = 'Неизвестная ошибка';
@@ -935,11 +848,15 @@ class Command {
             $json = json_decode(self::$queueMetaData[self::$queueCounter]);
 
             $now = $json->title . PHP_EOL;
+            $now .= 'Описание:' . PHP_EOL . $json->description . PHP_EOL;
+            $now .= 'Количество просмотров: ' . $json->view_count . PHP_EOL;
+            $now .= 'Количество лайков: ' . $json->like_count . PHP_EOL;
+            $now .= 'Количество подписчиков на канал: ' . $json->channel_follower_count . PHP_EOL;
+            $now .= 'Дата загрузки: ' . $json->upload_date . PHP_EOL;
             $now .= 'Продолжительность: ' . $json->duration_string . PHP_EOL;
-
             $msg = MessageBuilder::new()
                 ->setContent('')
-                ->addEmbed(embeds::createEmbed('Сейчас играет:',$now,6738196))
+                ->addEmbed(embeds::createEmbedWithImage('Сейчас играет:', $now, $json->logo,6738196))
                 ->setTts()
                 ->setReplyTo(self::$message);
             self::$channel->sendMessage($msg);

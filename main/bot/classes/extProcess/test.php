@@ -9,5 +9,5 @@ $test = new test();
 class test {
     public function __construct() {
 
-}
+    }
 }
