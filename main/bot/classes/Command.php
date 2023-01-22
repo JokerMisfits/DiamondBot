@@ -133,7 +133,7 @@ class Command {
                 $msg = MessageBuilder::new()
                     ->setContent('')
                     ->addEmbed(embeds::createEmbed('Rolled: ' . rand(0, 100),'<@' . self::$message['author']['id'] . '>',6738196))
-                    ->setTts(false)
+                    ->setTts()
                     ->setReplyTo(self::$message);
 
                 $deferred->resolve($msg);
@@ -215,7 +215,7 @@ class Command {
                 $msg = MessageBuilder::new()
                     ->setContent('')
                     ->addEmbed($embed)
-                    ->setTts(false)
+                    ->setTts()
                     ->setReplyTo(self::$message);
 
                 self::$channel->sendMessage($msg);
@@ -304,7 +304,7 @@ class Command {
 
             $deferred->promise()->then(function (Channel $channel) use ($play){
                 self::$loop->addTimer(0,function () use ($channel, $play){
-                    self::$discord->joinVoiceChannel($channel, false, true)->done(function (VoiceClient $vc) use ($play){
+                    self::$discord->joinVoiceChannel($channel)->done(function (VoiceClient $vc) use ($play){
                         self::$vc = $vc;
                         self::$loop->addTimer(0, $play);
                     });
@@ -472,7 +472,7 @@ class Command {
 
                             $deferred->promise()->then(function (Channel $channel) use ($play){
                                 self::$loop->addTimer(0,function () use ($channel, $play){
-                                    self::$discord->joinVoiceChannel($channel, false, true)->done(function (VoiceClient $vc) use ($play){
+                                    self::$discord->joinVoiceChannel($channel)->done(function (VoiceClient $vc) use ($play){
                                         self::$vc = $vc;
                                         self::$loop->addTimer(0, $play);
                                     });
@@ -820,11 +820,14 @@ class Command {
         $msg = MessageBuilder::new()
             ->setContent('')
             ->addEmbed(embeds::createEmbed($title,'<@' . self::$message['author']['id'] . '>',6738196))
-            ->setTts(false)
+            ->setTts()
             ->setReplyTo(self::$message);
         self::$channel->sendMessage($msg);
     }
 
+    /**
+     * @throws Exception
+     */
     private static function updateVoiceStates() : void{
 
         $description = '$audioPath ' . self::$audioPath . PHP_EOL;
@@ -864,15 +867,15 @@ class Command {
         $size1 = sizeof($files);
 
         for($i = 0;$i < $size1;$i++){
-            $startI = $i;
+            $continue = true;
             $size = sizeof(self::$queue);
             for ($j = 0;$j < $size;$j++){
                 if(self::$queue[$j] == $files[$i]){
-                    $startI++;
+                    $continue = false;
                     break;
                 }
             }
-            if($startI == $i){
+            if($continue){
                 if(isset(self::$queue)){
                     self::$queue[$size] = $files[$i];
                 }
@@ -910,7 +913,7 @@ class Command {
                 $msg = MessageBuilder::new()
                     ->setContent('')
                     ->addEmbed(embeds::createEmbed('Список очереди:',$titles,6738196))
-                    ->setTts(false)
+                    ->setTts()
                     ->setReplyTo(self::$message);
                 self::$channel->sendMessage($msg);
             }
@@ -937,7 +940,7 @@ class Command {
             $msg = MessageBuilder::new()
                 ->setContent('')
                 ->addEmbed(embeds::createEmbed('Сейчас играет:',$now,6738196))
-                ->setTts(false)
+                ->setTts()
                 ->setReplyTo(self::$message);
             self::$channel->sendMessage($msg);
         }
