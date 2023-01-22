@@ -1,6 +1,7 @@
 <?php
 
 //ToDo поискать скачивание плейлистов по тегам
+//ToDo проверить влияет ли луп на io если нет, почистить код
 
 use Discord\Builders\MessageBuilder;
 use Discord\Discord;
@@ -25,6 +26,7 @@ class Command {
     private static LoopInterface $loop;
     private static string $audioPath = '';
     private static array $queue = [];
+    private static array $queueMetaData = [];
     private static int $queueCounter = 0;
     private static array $args;
     private static array $radioArgs;
@@ -35,7 +37,6 @@ class Command {
     private static bool $radioState = false;
     private static bool $radioStarted = false;
     private static bool $checkForNewFile = false;
-
     private static bool $updateVoiceStatesRun = false;
 
     /**
@@ -230,7 +231,7 @@ class Command {
      * @throws NoPermissionsException
      */
 
-    //ToDO потестить как ведет себя, когда командуешь из других комнат
+    //ToDO протестировать как ведет себя, когда командуешь из других комнат
     private static function radio(): void {
         if(!self::$radioStarted){
             self::$radioStarted = true;
@@ -426,24 +427,22 @@ class Command {
                     }
                 }
                 elseif(self::$args[1] == 'queue'){
-                    //ToDo вывод очереди с title из json file
+                    self::setQueueMetaData();
                 }
                 elseif(self::$args[1] == 'to' && isset(self::$args[2])){
-                    (int)$counter = self::$args[2];
-                    if(is_int($counter)){
-                        if(isset(self::$queue[$counter])){
-                            self::$queueCounter = $counter;
-                            self::$audioPath = self::$queue[self::$queueCounter];
-                            self::$vc->stop();
-                            self::$loop->addTimer(0, $play);
-                        }
-                        else{
-                            self::sendRadioErrorToChannel(12);
-                        }
+                $counter = (int)self::$args[2];
+                    if(isset(self::$queue[$counter])){
+                        self::$queueCounter = $counter;
+                        self::$audioPath = self::$queue[self::$queueCounter];
+                        self::$vc->stop();
+                        self::$loop->addTimer(0, $play);
                     }
                     else{
-                        self::sendRadioErrorToChannel(13);
+                        self::sendRadioErrorToChannel(12);
                     }
+                }
+                elseif(self::$args[1] == 'now'){
+                    self::sendPlayNow();
                 }
                 elseif(self::$args[1] == 'y' && isset(self::$args[2]) && !self::$radioState || (self::$args[1] == 'add' && self::$radioState)){
 
@@ -671,7 +670,6 @@ class Command {
      */
 
     private static function deleteAudio() : void { //ToDo Когда появятся директории
-        self::$loop->addTimer(0,function () {
             $files = glob('music/*');
             foreach ($files as $file){
                 if (is_file($file)) {
@@ -681,7 +679,7 @@ class Command {
             self::$audioPath = '';
             self::$queue = [];
             self::$radioArgs = [];
-        });
+            self::$queueMetaData = [];
     }
 
     private static function setQueue($audioPath) : void {
@@ -715,7 +713,9 @@ class Command {
                 $newJson = (object)[];
                 $newJson->title = $json->title;
                 $newJson->duration_string = $json->duration_string;
-                $newJson->filesize = $json->filesize;
+                if(isset($json->filesize)){
+                    $newJson->filesize = $json->filesize;
+                }
                 $newJson->fulltitle = $json->fulltitle;
                 file_put_contents($path, json_encode($newJson));
             });
@@ -812,7 +812,7 @@ class Command {
             $title = 'Вашего номера нет в очереди, чтобы узнать номер нужной вам песни воспользуйтесь командой: /radio queue';
         }
         elseif($from == 13){
-            $title = 'Номер песни должен быть числом!';
+            $title = 'Очередь пуста';
         }
         else{
             $title = 'Неизвестная ошибка';
@@ -891,6 +891,62 @@ class Command {
             }
         }
     }
+
+    /**
+     * @throws NoPermissionsException
+     */
+    private static function setQueueMetaData($mode = 0) : void {
+        if(isset(self::$queue)){
+            $size = sizeof(self::$queue);
+            $titles = '';
+            for($i = 0;$i < $size;$i++){
+                $path = str_replace('mp3','info.json',self::$queue[$i]);
+                $json = json_decode(file_get_contents($path));
+                self::$queueMetaData[$i] = json_encode($json);
+                $titles .= $i . ' ' . $json->title . PHP_EOL;
+            }
+
+            if($mode == 0){
+                $msg = MessageBuilder::new()
+                    ->setContent('')
+                    ->addEmbed(embeds::createEmbed('Список очереди:',$titles,6738196))
+                    ->setTts(false)
+                    ->setReplyTo(self::$message);
+                self::$channel->sendMessage($msg);
+            }
+        }
+        else{
+            self::sendRadioErrorToChannel(13);
+        }
+    }
+
+    /**
+     * @throws NoPermissionsException
+     */
+    private static function sendPlayNow() : void {
+
+        if(!isset(self::$queueMetaData[0])){
+            self::setQueueMetaData(1);
+        }
+        if(isset(self::$queue[self::$queueCounter])){
+            $json = json_decode(self::$queueMetaData[self::$queueCounter]);
+
+            $now = $json->title . PHP_EOL;
+            $now .= 'Продолжительность: ' . $json->duration_string . PHP_EOL;
+
+            $msg = MessageBuilder::new()
+                ->setContent('')
+                ->addEmbed(embeds::createEmbed('Сейчас играет:',$now,6738196))
+                ->setTts(false)
+                ->setReplyTo(self::$message);
+            self::$channel->sendMessage($msg);
+        }
+        else{
+            self::sendRadioErrorToChannel(13);
+        }
+
+    }
+
     private static function test() : void {
             $process = new Process("php bot/classes/extProcess/test.php ", null, null, array());
             $process->start();
