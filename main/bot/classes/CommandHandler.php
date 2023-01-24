@@ -1,6 +1,9 @@
 <?php
 
 //ToDo поискать скачивание плейлистов по тегам
+//ToDO Пофикссить warning
+//ToDO добавить авторедактирование-создание сообщения now(переделать команду Now)
+//ToDO Пофиксить, что после add y не работает
 
 use Discord\Builders\MessageBuilder;
 use Discord\Discord;
@@ -15,7 +18,7 @@ use Psr\Log\LoggerInterface;
 use React\ChildProcess\Process;
 use React\EventLoop\TimerInterface;
 
-class Command {
+class CommandHandler {
     private static Discord $discord;
     private static Guild $guild;
     private static LoggerInterface $logger;
@@ -37,6 +40,7 @@ class Command {
     private static bool $radioStarted = false;
     private static bool $checkForNewFile = false;
     private static bool $updateVoiceStatesRun = false;
+    private static int $authorId;
 
     /**
      * @throws Exception
@@ -44,7 +48,7 @@ class Command {
      * @throws NoPermissionsException
      */
 
-    public static function init(Channel $channel, Message $message, int $checked = 0): void {
+    public static function init(Message $message, Channel $channel, int $checked = 0, int $authorId = null): void {
 
         self::$discord = DiamondBot::$discord;
         self::$guild = &DiamondBot::$guild;
@@ -53,15 +57,22 @@ class Command {
         self::$voiceStates = &DiamondBot::$voiceStates;
         self::$channel = $channel;
         self::$message = $message;
+        if(!isset(self::$authorId)){
+            if ($authorId !== null ){
+                self::$authorId = $authorId;
+            }
+            else{
+                self::$authorId = $message->author->id;
+            }
+        }
 
         $deferred = new Deferred();
-
         $deferred->promise()->then(function ($result){
             if($result == 0){
                     self::help();
             }
             elseif($result == 1){
-                    Command::init(self::$channel, self::$message,1);
+                    CommandHandler::init(self::$message, self::$channel,1);
             }
             else{
                     self::$result();
@@ -117,9 +128,7 @@ class Command {
     private static function roll(): void {
         $msg = MessageBuilder::new()
             ->setContent('')
-            ->addEmbed(embeds::createEmbed('Rolled: ' . rand(0, 100),'<@' . self::$message['author']['id'] . '>',6738196))
-            ->setTts()
-            ->setReplyTo(self::$message);
+            ->addEmbed(embeds::createEmbed('Rolled: ' . rand(0, 100),'<@' . self::$authorId . '>',6738196));
         self::$channel->sendMessage($msg);
     }//Roll command
 
@@ -133,7 +142,7 @@ class Command {
         $count = self::$args[1] ?? 1;
         self::$channel->limitDelete($count)->done(function () use ($count) {
             self::$channel->sendMessage('', false,
-                embeds::createEmbed('Сообщений успешно удалено ' . $count,'<@' . self::$message['author']['id'] . '>',6738196));
+                embeds::createEmbed('Сообщений успешно удалено ' . $count,'<@' . self::$authorId . '>',6738196));
         });
     }//Clear command
 
@@ -159,8 +168,7 @@ class Command {
             $msg = MessageBuilder::new()
                 ->setContent('')
                 ->addEmbed($embed)
-                ->setTts()
-                ->setReplyTo(self::$message);
+                ->_setFlags(Message::FLAG_EPHEMERAL);
             self::$channel->sendMessage($msg);
         })->otherwise(function (Exception | Throwable $e){
             self::$logger->critical($e->getMessage());
@@ -180,8 +188,8 @@ class Command {
 
             if (self::$message['channel_id'] == 700021655325507604 && !self::$updateVoiceStatesRun){
                 self::$updateVoiceStatesRun = true;
-                self::$loop->addPeriodicTimer(10,function (){
-                    self::updateVoiceStates();
+                self::$loop->addPeriodicTimer(10,function ($timer){
+                    self::updateVoiceStates($timer);
                 });
             }
 
@@ -240,7 +248,7 @@ class Command {
         };
 
         if(!self::$radioState && self::$audioPath != ''){
-                self::getUsersChannel($deferred, self::$message->author->id);
+                self::getUsersChannel($deferred, self::$authorId);
             $deferred->promise()->then(function (Channel $channel) use ($play){
                     self::$discord->joinVoiceChannel($channel)->done(function (VoiceClient $vc) use ($play){
                         self::$vc = $vc;
@@ -261,39 +269,63 @@ class Command {
         }
         else{
             if(isset(self::$args[1])){
-                if(self::$args[1] == 'stop'){
-                    self::$radioState = false;
-                    self::deleteAudio();
-                    self::$vc->close();
-                }
-                elseif(self::$args[1] == 'pause'){
-                    self::$vc->pause();
-                }
-                elseif(self::$args[1] == 'unpause'){
-                    self::$vc->unpause();
-                }
-                elseif(self::$args[1] == 'next'){
-                    if(isset(self::$queue[self::$queueCounter + 1])){
-                        self::$queueCounter++;
-                        self::$audioPath = self::$queue[self::$queueCounter];
-                        self::$vc->stop();
-                        $play();
+                if(self::$args[1] == 'stop'){ //ToDo добавить проверку на пользователя кто хочет отключить музыку либо сделать голосование (К примеру он должен быть в том же канале , что и бот)
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
                     }
                     else{
-                        self::sendRadioErrorToChannel(10);
+                        self::$radioState = false;
+                        self::deleteAudio();
+                        self::$vc->close();
+                    }
+                }
+                elseif(self::$args[1] == 'pause'){
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
+                    }
+                    else{
+                        self::$vc->pause();
+                    }
+                }
+                elseif(self::$args[1] == 'unpause'){
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
+                    }
+                    else{
+                        self::$vc->unpause();
+                    }
+                }
+                elseif(self::$args[1] == 'next'){
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
+                    }
+                    else{
+                        if(isset(self::$queue[self::$queueCounter + 1])){
+                            self::$queueCounter++;
+                            self::$audioPath = self::$queue[self::$queueCounter];
+                            self::$vc->stop();
+                            $play();
+                        }
+                        else{
+                            self::sendRadioErrorToChannel(10);
+                        }
                     }
                 }
                 elseif(self::$args[1] == 'past'){
-                    if(isset(self::$queue[self::$queueCounter - 1])){
-                        self::$queueCounter--;
-                        self::$audioPath = self::$queue[self::$queueCounter];
-                        self::$vc->stop();
-                        $play();
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
                     }
                     else{
-                        self::sendRadioErrorToChannel(11);
+                        if(isset(self::$queue[self::$queueCounter - 1])){
+                            self::$queueCounter--;
+                            self::$audioPath = self::$queue[self::$queueCounter];
+                            self::$vc->stop();
+                            $play();
+                        }
+                        else{
+                            self::sendRadioErrorToChannel(11);
+                        }
                     }
-
                 }
                 elseif(self::$args[1] == 'skip'){
                     if(self::$radioStateDownload){
@@ -335,45 +367,63 @@ class Command {
                     }
                 }
                 elseif(self::$args[1] == 'cansel'){
-                    if(self::$radioStateDownload){
-                        $deferred = new Deferred();
-                        self::awaitDownload($deferred);
-                        $deferred->promise()->then(function (){
-                            self::$radioCansel = true;
-                        })->otherwise(function (){
-                            self::sendRadioErrorToChannel(5);
-                        });
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
                     }
                     else{
-                        self::$radioCansel = true;
+                        if(self::$radioStateDownload){
+                            $deferred = new Deferred();
+                            self::awaitDownload($deferred);
+                            $deferred->promise()->then(function (){
+                                self::$radioCansel = true;
+                            })->otherwise(function (){
+                                self::sendRadioErrorToChannel(5);
+                            });
+                        }
+                        else{
+                            self::$radioCansel = true;
+                        }
                     }
                 }
                 elseif(self::$args[1] == 'repeat'){
-                    if(!self::$radioRepeat){
-                        self::$radioRepeat = true;
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
                     }
                     else{
-                        self::$radioRepeat = false;
+                        if(!self::$radioRepeat){
+                            self::$radioRepeat = true;
+                        }
+                        else{
+                            self::$radioRepeat = false;
+                        }
                     }
                 }
                 elseif(self::$args[1] == 'queue'){
                     if(self::$radioStateDownload){
                         self::sendRadioErrorToChannel(14);
                     }
+                    elseif(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
+                    }
                     else{
                         self::setQueueMetaData();
                     }
                 }
                 elseif(self::$args[1] == 'to' && isset(self::$args[2])){
-                $counter = (int)self::$args[2];
-                    if(isset(self::$queue[$counter])){
-                        self::$queueCounter = $counter;
-                        self::$audioPath = self::$queue[self::$queueCounter];
-                        self::$vc->stop();
-                        $play();
+                    if(!self::$radioState){
+                        self::sendRadioErrorToChannel(1);
                     }
                     else{
-                        self::sendRadioErrorToChannel(12);
+                        $counter = (int)self::$args[2];
+                        if(isset(self::$queue[$counter])){
+                            self::$queueCounter = $counter;
+                            self::$audioPath = self::$queue[self::$queueCounter];
+                            self::$vc->stop();
+                            $play();
+                        }
+                        else{
+                            self::sendRadioErrorToChannel(12);
+                        }
                     }
                 }
                 elseif(self::$args[1] == 'now'){
@@ -387,37 +437,48 @@ class Command {
                 elseif(self::$args[1] == 'y' && isset(self::$args[2]) && !self::$radioState || (self::$args[1] == 'add' && self::$radioState)){
 
                     $deferred = new Deferred();
-                    self::download($deferred,self::$args[2]);
+                    self::getUsersChannel($deferred, self::$authorId);
 
-                    $deferred->promise()->then(function ($audioPath) use (&$play){
-                        if(self::$args[1] == 'add'){
-                            self::setQueue($audioPath);
-                        }
-                        else{
-                            if(!isset(self::$audioPath) && isset($audioPath)){
-                                self::$audioPath = $audioPath;
+                    $deferred->promise()->then(function (Channel $channel) use (&$play){
+                        $deferredDownload = new Deferred();
+                        self::download($deferredDownload,self::$args[2]);
+
+                        $deferredDownload->promise()->then(function ($audioPath) use (&$play, $channel){
+                            if(self::$args[1] == 'add'){
+                                self::setQueue($audioPath);
                             }
-                            $deferred = new Deferred();
-                            self::getUsersChannel($deferred, self::$message->author->id);
-
-                            $deferred->promise()->then(function (Channel $channel) use (&$play){
+                            else{
+                                if(!isset(self::$audioPath) && isset($audioPath)){
+                                    self::$audioPath = $audioPath;
+                                }
                                 self::$discord->joinVoiceChannel($channel)->done(function (VoiceClient $vc) use (&$play){
                                     self::$vc = $vc;
                                     $play();
                                 });
-                            });
+                            }
+                        })->otherwise(function (Exception | Throwable | int $e){
+                            if(is_int($e)){
+                                if($e == 0){
+                                    self::sendRadioErrorToChannel(6);
+                                }
+                                elseif($e == 1){
+                                    self::sendRadioErrorToChannel(7);
+                                }
+                                elseif($e == 2){
+                                    self::sendRadioErrorToChannel(9);
+                                }
+                            }
+                            else{
+                                self::$logger->critical($e->getMessage());
+                            }
+                        });
+                    })->otherwise(function (Exception | Throwable | int | string $e){
+                        if(is_int($e) && $e == 0){
+                            self::sendRadioErrorToChannel(2);
                         }
-                    })->otherwise(function (Exception | Throwable | int $e){
-                        if(is_int($e)){
-                            if($e == 0){
-                                self::sendRadioErrorToChannel(6);
-                            }
-                            elseif($e == 1){
-                                self::sendRadioErrorToChannel(7);
-                            }
-                            elseif($e == 2){
-                                self::sendRadioErrorToChannel(9);
-                            }
+                        elseif(is_string($e)){
+                            self::$logger->critical($e);
+                            self::sendRadioErrorToChannel(3);
                         }
                         else{
                             self::$logger->critical($e->getMessage());
@@ -686,7 +747,7 @@ class Command {
             $title = 'Музыка уже играет, воспользуйтесь командой /radio add';
         }
         elseif($from == 1){
-            $title = 'Подождите пока бот зайдет в канал';
+            $title = 'Подождите пока бот зайдет к вам на канал';
         }
         elseif($from == 2){
             $title = 'Необходимо зайти в голосовой канал';
@@ -732,16 +793,20 @@ class Command {
         }
         $msg = MessageBuilder::new()
             ->setContent('')
-            ->addEmbed(embeds::createEmbed($title,'<@' . self::$message['author']['id'] . '>',6738196))
-            ->setTts()
-            ->setReplyTo(self::$message);
+            ->addEmbed(embeds::createEmbed($title,'<@' . self::$authorId . '>',6738196))
+            ->_setFlags(Message::FLAG_EPHEMERAL);
         self::$channel->sendMessage($msg);
     }
 
     /**
      * @throws Exception
      */
-    private static function updateVoiceStates() : void{
+    private static function updateVoiceStates(TimerInterface $timer) : void{
+
+        if(!self::$radioState){
+            self::$updateVoiceStatesRun = false;
+            self::$loop->cancelTimer($timer);
+        }
 
         $description = '$audioPath ' . self::$audioPath . PHP_EOL;
         if(isset(self::$queue[0])){
@@ -819,15 +884,19 @@ class Command {
                 $path = str_replace('mp3','info.json',self::$queue[$i]);
                 $json = json_decode(file_get_contents($path));
                 self::$queueMetaData[$i] = json_encode($json);
-                $titles .= $i . ' ' . $json->title . PHP_EOL;
+                if($i == self::$queueCounter){
+                    $titles .= $i . ' ' . $json->title . ' (ИГРАЕТ СЕЙЧАС)' . PHP_EOL;
+                }
+                else{
+                    $titles .= $i . ' ' . $json->title . PHP_EOL;
+                }
             }
 
             if($mode == 0){
                 $msg = MessageBuilder::new()
                     ->setContent('')
                     ->addEmbed(embeds::createEmbed('Список очереди:',$titles,6738196))
-                    ->setTts()
-                    ->setReplyTo(self::$message);
+                    ->_setFlags(Message::FLAG_EPHEMERAL);
                 self::$channel->sendMessage($msg);
             }
         }
@@ -848,7 +917,12 @@ class Command {
             $json = json_decode(self::$queueMetaData[self::$queueCounter]);
 
             $now = $json->title . PHP_EOL;
-            $now .= 'Описание:' . PHP_EOL . $json->description . PHP_EOL;
+            if(strlen($json->description>=3900)){
+                $now .= 'Описание:' . PHP_EOL . mb_strimwidth($json->description,0,3900) . PHP_EOL;
+            }
+            else{
+                $now .= 'Описание:' . PHP_EOL . $json->description . PHP_EOL;
+            }
             $now .= 'Количество просмотров: ' . $json->view_count . PHP_EOL;
             $now .= 'Количество лайков: ' . $json->like_count . PHP_EOL;
             $now .= 'Количество подписчиков на канал: ' . $json->channel_follower_count . PHP_EOL;
@@ -857,21 +931,37 @@ class Command {
             $msg = MessageBuilder::new()
                 ->setContent('')
                 ->addEmbed(embeds::createEmbedWithImage('Сейчас играет:', $now, $json->logo,6738196))
-                ->setTts()
-                ->setReplyTo(self::$message);
+                ->_setFlags(Message::FLAG_EPHEMERAL);
             self::$channel->sendMessage($msg);
         }
         else{
             self::sendRadioErrorToChannel(13);
         }
-
     }
 
+    public static function getRadioState() : bool {
+        return self::$radioState;
+    }
+
+    public static function getRepeatState() : bool {
+        return self::$radioRepeat;
+    }
+
+    public static function getCanselState() : bool {
+        return self::$radioCansel;
+    }
+
+    /**
+     * @throws NoPermissionsException
+     */
     private static function test() : void {
-            $process = new Process("php bot/classes/extProcess/test.php ", null, null, array());
-            $process->start();
-            $process->on('exit', function ($res){
-                self::$logger->info('test.php завершился кодом состояния: ' . $res);
-            });
+
+
+//->addComponent(Button::new(Button::STYLE_LINK)->setLabel('STYLE_LINK')->setUrl('https://www.php.net/manual/ru/function.mb-strimwidth.php'));
+//            $process = new Process("php bot/classes/extProcess/test.php ", null, null, array());
+//            $process->start();
+//            $process->on('exit', function ($res){
+//                self::$logger->info('test.php завершился кодом состояния: ' . $res);
+//            });
     }
 }

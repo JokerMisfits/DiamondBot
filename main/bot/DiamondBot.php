@@ -3,13 +3,13 @@
 use Discord\Discord;
 use Discord\Parts\Channel\Message;
 use Discord\Parts\Guild\Guild;
+use Discord\Parts\Interactions\Interaction;
 use Discord\Parts\User\Activity;
 use Discord\Parts\WebSockets\VoiceStateUpdate;
 use Discord\WebSockets\Event;
 use Discord\WebSockets\Intents;
 use Psr\Log\LoggerInterface;
 use React\EventLoop\LoopInterface;
-use React\Promise\Deferred;
 
 class DiamondBot {
     public static mysqli $mysqli;
@@ -18,7 +18,6 @@ class DiamondBot {
     public static Guild $guild;
     public static LoopInterface $loop;
     public static Discord $discord;
-
     public function __construct() {
         try {
             $discord = new Discord([
@@ -58,47 +57,42 @@ class DiamondBot {
         });
 
         $discord->on(Event::VOICE_STATE_UPDATE, function (VoiceStateUpdate $state) {
-            self::$loop->addTimer(0, function () use ($state){
-                if(isset(self::$voiceStates[0])){
-                    $size = sizeof(self::$voiceStates);
-                    if($state->channel_id != null){
-                        for($i = 0;$i < $size;$i++){
-                            if(self::$voiceStates[$i]->user_id == $state->user_id){
-                                self::$voiceStates[$i]->channel_id = $state->channel_id;
-                                return;
-                            }
+            if(isset(self::$voiceStates[0])){
+                $size = sizeof(self::$voiceStates);
+                if($state->channel_id != null){
+                    for($i = 0;$i < $size;$i++){
+                        if(self::$voiceStates[$i]->user_id == $state->user_id){
+                            self::$voiceStates[$i]->channel_id = $state->channel_id;
+                            return;
                         }
                     }
-                    else{
-                        for($i = 0;$i < $size;$i++){
-                            if(self::$voiceStates[$i]->user_id == $state->user_id){
-                                unset(self::$voiceStates[$i]);
-                                sort(self::$voiceStates);
-                                return;
-                            }
-                        }
-                    }
-                    self::$voiceStates[$size] = $state;
                 }
                 else{
-                    self::$voiceStates[0] = $state;
+                    for($i = 0;$i < $size;$i++){
+                        if(self::$voiceStates[$i]->user_id == $state->user_id){
+                            unset(self::$voiceStates[$i]);
+                            sort(self::$voiceStates);
+                            return;
+                        }
+                    }
                 }
-            });
+                self::$voiceStates[$size] = $state;
+            }
+            else{ self::$voiceStates[0] = $state; }
         });
 
         $discord->on(Event::MESSAGE_CREATE, function (Message $message, Discord $discord) {
-            $deferred = new Deferred();
             if(in_array((int)$message->channel_id, BotOptions::getBotOption('botValidateChannels'))){
-                $channel = $discord->getChannel($message['channel_id']);
                 if (str_contains($message->content, "<@" . BotOptions::getBotOption('botId') . ">")) {
-                    $deferred->resolve($channel);
+                    CommandHandler::init($message, $discord->getChannel($message['channel_id']));
                 }
             }
-            $deferred->promise()->then(function ($channel) use ($message){
-                self::$loop->addTimer(0,function () use ($channel, $message){
-                    Command::init($channel, $message);
-                });
-            });
+        });
+
+        $discord->on(Event::INTERACTION_CREATE, function (Interaction $interaction, Discord $discord){
+            if (in_array($interaction['data']->custom_id,InteractionList::$interactions)){
+                InteractionHandler::init($interaction, $discord->getChannel($interaction['channel_id']));
+            }
         });
 
         $discord->run();

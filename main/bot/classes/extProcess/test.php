@@ -8,6 +8,5 @@ $test = new test();
 //ToDO Потестить скачивание только json и по ссылке транслировать аудио без скачивания
 class test {
     public function __construct() {
-
     }
 }

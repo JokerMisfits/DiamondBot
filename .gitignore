@@ -211,3 +211,4 @@ composer.json
 *.json
 main/bot/classes/BotOptions.php
 *.php~
+*.webm
