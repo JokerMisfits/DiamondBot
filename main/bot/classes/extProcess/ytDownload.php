@@ -21,7 +21,7 @@ if(isset($argv[1])){
                 ->audioQuality('0') // 0 is the best
                 ->maxDownloads(10)
                 ->output('%(id)s.%(ext)s')
-                //->playlistRandom(true)//ToDO Проверить удалить или добавить как опцию
+                //->playlistRandom(true)
                 ->url($link)
         );
         foreach ($collection->getVideos() as $audio) {

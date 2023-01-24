@@ -171,7 +171,7 @@ class InteractionHandler {
      * @throws Throwable
      * @throws NoPermissionsException
      */
-    private static function help() : void { //Todo Сделать отдельный Help для Interactions
+    private static function help() : void {
         /** @var Message $message */ $message = self::$factory->create(Message::class);
         $message->content = '/help';
         self::$interaction->acknowledge();

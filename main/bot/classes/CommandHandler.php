@@ -1,9 +1,21 @@
 <?php
 
-//ToDo поискать скачивание плейлистов по тегам
-//ToDO Пофикссить warning
-//ToDO добавить авторедактирование-создание сообщения now(переделать команду Now)
-//ToDO Пофиксить, что после add y не работает
+//ToDo Поискать скачивание плейлистов по тегам
+//ToDO Исправить warning //ToDO Вывод sub команд
+//ToDO Добавить авто редактирование-создание сообщения now(переделать команду Now)
+//ToDO Добавить chunk_split на вывод Now + опечатка
+//ToDO Исправить, что после /radio add /radio y не работает (вроде решено)
+//ToDO Добавить метод на доступные команды + проверка на права
+//ToDO Протестировать как ведет себя, когда командуешь из других комнат
+//ToDo Добавить проверку на пользователя кто хочет отключить музыку либо сделать голосование (К примеру он должен быть в том же канале , что и бот)
+//ToDo Разобраться с _setFlags(Message::FLAG_EPHEMERAL)
+//ToDo Переписать checkUrl
+//ToDo Переписать выводы ошибок, если триггер interaction
+//ToDO ytDownload добавить условие загрузки 1 песни (text input in modal)
+//Todo Сделать отдельный Help для Interactions
+//ToDO Протестировать скачивание только json и по ссылке транслировать аудио без скачивания
+//ToDO ytDownload проверить удалить или добавить как опцию >playlistRandom(true)
+//ToDO Удалить или перенести method UpdateVoiceStates
 
 use Discord\Builders\MessageBuilder;
 use Discord\Discord;
@@ -37,9 +49,7 @@ class CommandHandler {
     private static bool $radioCansel = false;
     private static array $voiceStates;
     private static bool $radioState = false;
-    private static bool $radioStarted = false;
     private static bool $checkForNewFile = false;
-    private static bool $updateVoiceStatesRun = false;
     private static int $authorId;
 
     /**
@@ -96,7 +106,7 @@ class CommandHandler {
                     }
 
                     for ($i = 0; $i < $size; $i++) {
-                        if ($command == $commandList[$i]['command']) { //ToDO Добавить метод на доступные команды + проверка на права
+                        if ($command == $commandList[$i]['command']) {
                             self::$args = $args;
                             $deferred->resolve(1);
                         }
@@ -130,7 +140,7 @@ class CommandHandler {
             ->setContent('')
             ->addEmbed(embeds::createEmbed('Rolled: ' . rand(0, 100),'<@' . self::$authorId . '>',6738196));
         self::$channel->sendMessage($msg);
-    }//Roll command
+    }
 
     /**
      * @throws Exception
@@ -144,7 +154,7 @@ class CommandHandler {
             self::$channel->sendMessage('', false,
                 embeds::createEmbed('Сообщений успешно удалено ' . $count,'<@' . self::$authorId . '>',6738196));
         });
-    }//Clear command
+    }
 
     /**
      * @throws Exception
@@ -173,7 +183,7 @@ class CommandHandler {
         })->otherwise(function (Exception | Throwable $e){
             self::$logger->critical($e->getMessage());
         });
-    }//Help command
+    }
 
     /**
      * @throws Exception
@@ -181,19 +191,7 @@ class CommandHandler {
      * @throws NoPermissionsException
      */
 
-    //ToDO протестировать как ведет себя, когда командуешь из других комнат
     private static function radio(): void {
-        if(!self::$radioStarted){
-            self::$radioStarted = true;
-
-            if (self::$message['channel_id'] == 700021655325507604 && !self::$updateVoiceStatesRun){
-                self::$updateVoiceStatesRun = true;
-                self::$loop->addPeriodicTimer(10,function ($timer){
-                    self::updateVoiceStates($timer);
-                });
-            }
-
-        }
         if(((self::$args[1] == 'add' && !self::$radioState) || (self::$args[1] == 'y')) && isset(self::$radioArgs[0]) && self::$radioState){
             self::$args = self::$radioArgs;
             if(self::$args[1] == 'y'){
@@ -269,7 +267,7 @@ class CommandHandler {
         }
         else{
             if(isset(self::$args[1])){
-                if(self::$args[1] == 'stop'){ //ToDo добавить проверку на пользователя кто хочет отключить музыку либо сделать голосование (К примеру он должен быть в том же канале , что и бот)
+                if(self::$args[1] == 'stop'){
                     if(!self::$radioState){
                         self::sendRadioErrorToChannel(1);
                     }
@@ -486,15 +484,15 @@ class CommandHandler {
                     });
                 }
                 else{
-                    self::$args = self::$radioArgs;//Восстановление аргументов, если команды не было в sub commands
+                    self::$args = self::$radioArgs;
                     self::sendRadioErrorToChannel(8);
                 }
             }
             else{
-                //ToDO Вывод sub команд
+
             }
         }
-    }//radio
+    }
 
     /**
      * @throws Exception
@@ -546,7 +544,7 @@ class CommandHandler {
                 }
             }
         });
-    }//download
+    }
 
     private static function checkUrl(string $url) : bool {
         if($url[0] == 'h')
@@ -584,7 +582,7 @@ class CommandHandler {
         if(strlen($url) >= 43)
             return true;
         return false;
-    } //ToDo Переписать
+    }
 
     /**
      * @throws Exception
@@ -636,7 +634,7 @@ class CommandHandler {
      * @throws Throwable
      */
 
-    private static function deleteAudio() : void { //ToDo Когда появятся директории
+    private static function deleteAudio() : void {
             $files = glob('music/*');
             foreach ($files as $file){
                 if (is_file($file)) {
@@ -801,10 +799,10 @@ class CommandHandler {
     /**
      * @throws Exception
      */
-    private static function updateVoiceStates(TimerInterface $timer) : void{
+    private static function updateVoiceStates(TimerInterface $timer) : void {
 
         if(!self::$radioState){
-            self::$updateVoiceStatesRun = false;
+            //self::$updateVoiceStatesRun = false;
             self::$loop->cancelTimer($timer);
         }
 
@@ -951,13 +949,7 @@ class CommandHandler {
         return self::$radioCansel;
     }
 
-    /**
-     * @throws NoPermissionsException
-     */
     private static function test() : void {
-
-
-//->addComponent(Button::new(Button::STYLE_LINK)->setLabel('STYLE_LINK')->setUrl('https://www.php.net/manual/ru/function.mb-strimwidth.php'));
 //            $process = new Process("php bot/classes/extProcess/test.php ", null, null, array());
 //            $process->start();
 //            $process->on('exit', function ($res){
